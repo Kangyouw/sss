@@ -530,6 +530,12 @@ function initPlayer(videoUrl) {
     skipIntroEnabled = localStorage.getItem('skipIntroEnabled') !== 'false'; // 默认为true
     skipOutroEnabled = localStorage.getItem('skipOutroEnabled') !== 'false'; // 默认为true
     
+    // 配置自定义播放速度选项
+    const playbackRateConfig = {
+        index: playbackRates.indexOf(currentPlaybackRate) !== -1 ? playbackRates.indexOf(currentPlaybackRate) : 2,
+        options: playbackRates.map(rate => ({ name: `${rate}x`, value: rate }))
+    }
+    
     // Create new ArtPlayer instance
     art = new Artplayer({
         container: '#player',
@@ -547,7 +553,7 @@ function initPlayer(videoUrl) {
         setting: true,
         loop: false,
         flip: false,
-        playbackRate: playbackRates, // 使用自定义的播放速度选项数组
+        playbackRate: true, // 启用播放速度功能，布尔值类型
         aspectRatio: false,
         fullscreen: true,
         fullscreenWeb: true,
@@ -667,8 +673,18 @@ function initPlayer(videoUrl) {
                     }
                     
                     // 应用保存的播放速度
-                    if (video && currentPlaybackRate !== 1.0) {
-                        video.playbackRate = currentPlaybackRate;
+                    try {
+                        // 优先使用播放器插件设置播放速度
+                        if (art && art.plugins && art.plugins.playbackRate && art.plugins.playbackRate.switchPlaybackRate) {
+                            art.plugins.playbackRate.switchPlaybackRate(currentPlaybackRate);
+                        } else if (video) {
+                            // 备用方式直接设置视频元素的播放速度
+                            video.playbackRate = currentPlaybackRate;
+                        }
+                        // 更新当前播放速度变量
+                        currentPlaybackRate = video ? video.playbackRate : 1.0;
+                    } catch (e) {
+                        console.warn('设置播放速度时出错:', e);
                     }
                     
                     // 视频加载成功，隐藏错误提示
