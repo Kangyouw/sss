@@ -94,6 +94,21 @@ let currentVideoUrl = ''; // 记录当前实际的视频URL
 let currentPlaybackRate = 1.0; // 当前播放速度
 let videoQualityLevels = []; // 视频质量级别列表
 let currentQualityIndex = -1; // 当前选中的质量索引
+// 智能跳过片首片尾相关变量
+let skipIntroEnabled = true; // 默认启用跳过片头
+let skipOutroEnabled = true; // 默认启用跳过片尾
+let introSkipped = false; // 标记片头是否已跳过
+let outroSkipped = false; // 标记片尾是否已跳过
+let skipButton = null; // 跳过按钮元素
+let introStart = 0; // 片头开始时间（秒）
+let introEnd = 90; // 片头结束时间（默认90秒）
+let outroStart = null; // 片尾开始时间
+let outroEnd = null; // 片尾结束时间
+// 播放速度相关增强
+const playbackRates = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]; // 扩展速度选项
+let originalPlaybackRate = 1.0; // 保存原始播放速度（用于长按等临时改变）
+let isLongPress = false; // 长按状态标记
+let longPressTimer = null; // 长按计时器
 const isWebkit = (typeof window.webkitConvertPointFromNodeToPage === 'function')
 Artplayer.FULLSCREEN_WEB_IN_BODY = true;
 
@@ -284,6 +299,22 @@ function initializePageContent() {
     }, 200);
 }
 
+// 切换快捷键帮助模态框
+function toggleShortcutHelp() {
+    const shortcutHelpModal = document.getElementById('shortcutHelpModal');
+    if (shortcutHelpModal) {
+        if (shortcutHelpModal.classList.contains('hidden')) {
+            shortcutHelpModal.classList.remove('hidden');
+            // 阻止背景滚动
+            document.body.style.overflow = 'hidden';
+        } else {
+            shortcutHelpModal.classList.add('hidden');
+            // 恢复背景滚动
+            document.body.style.overflow = '';
+        }
+    }
+}
+
 // 处理键盘快捷键
 function handleKeyboardShortcuts(e) {
     // 忽略输入框中的按键事件
@@ -360,6 +391,47 @@ function handleKeyboardShortcuts(e) {
             e.preventDefault();
         }
     }
+    
+    // [ 键 = 降低播放速度
+    if (e.key === '[') {
+        if (art && art.plugins && art.plugins.playbackRate) {
+            const currentIndex = playbackRates.indexOf(currentPlaybackRate);
+            if (currentIndex > 0) {
+                const newRate = playbackRates[currentIndex - 1];
+                art.plugins.playbackRate.switchPlaybackRate(newRate);
+                showShortcutHint(`减速 ${newRate}x`, 'speed');
+            }
+            e.preventDefault();
+        }
+    }
+    
+    // ] 键 = 提高播放速度
+    if (e.key === ']') {
+        if (art && art.plugins && art.plugins.playbackRate) {
+            const currentIndex = playbackRates.indexOf(currentPlaybackRate);
+            if (currentIndex < playbackRates.length - 1) {
+                const newRate = playbackRates[currentIndex + 1];
+                art.plugins.playbackRate.switchPlaybackRate(newRate);
+                showShortcutHint(`加速 ${newRate}x`, 'speed');
+            }
+            e.preventDefault();
+        }
+    }
+    
+    // r 键 = 重置播放速度
+    if (e.key === 'r' || e.key === 'R') {
+        if (art && art.plugins && art.plugins.playbackRate) {
+            art.plugins.playbackRate.switchPlaybackRate(1.0);
+            showShortcutHint('正常速度 1.0x', 'speed');
+            e.preventDefault();
+        }
+    }
+    
+    // h 键 = 显示快捷键帮助
+    if (e.key === 'h' || e.key === 'H') {
+        toggleShortcutHelp();
+        e.preventDefault();
+    }
 }
 
 // 显示快捷键提示
@@ -386,6 +458,8 @@ function showShortcutHint(text, direction) {
         iconElement.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>';
     } else if (direction === 'fullscreen') {
         iconElement.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5v-4m0 4h-4m4 0l-5-5"></path>';
+    } else if (direction === 'speed') {
+        iconElement.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>';
     } else if (direction === 'play') {
         iconElement.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3l14 9-14 9V3z"></path>';
     }
@@ -452,6 +526,10 @@ function initPlayer(videoUrl) {
     const savedRateKey = `playbackRate_${getVideoId()}`;
     currentPlaybackRate = parseFloat(localStorage.getItem(savedRateKey) || '1.0');
     
+    // 从localStorage加载跳过片头片尾设置
+    skipIntroEnabled = localStorage.getItem('skipIntroEnabled') !== 'false'; // 默认为true
+    skipOutroEnabled = localStorage.getItem('skipOutroEnabled') !== 'false'; // 默认为true
+    
     // Create new ArtPlayer instance
     art = new Artplayer({
         container: '#player',
@@ -469,7 +547,7 @@ function initPlayer(videoUrl) {
         setting: true,
         loop: false,
         flip: false,
-        playbackRate: true, // 设置为布尔值以启用播放速度控制
+        playbackRate: playbackRates, // 使用自定义的播放速度选项数组
         aspectRatio: false,
         fullscreen: true,
         fullscreenWeb: true,
@@ -480,7 +558,7 @@ function initPlayer(videoUrl) {
         playsInline: true,
         autoPlayback: false,
         airplay: true,
-        hotkey: false,
+        hotkey: true, // 启用快捷键支持
         theme: '#23ade5',
         lang: navigator.language.toLowerCase(),
         moreVideoAttr: {
@@ -721,6 +799,37 @@ function initPlayer(videoUrl) {
             const savedRateKey = `playbackRate_${getVideoId()}`;
             localStorage.setItem(savedRateKey, rate.toString());
             showSpeedChangeHint(rate);
+        });
+        
+        // 初始化智能跳过功能
+        initSkipIntroOutro();
+        
+        // 设置视频元数据加载事件，计算片尾时间
+        art.video.addEventListener('loadedmetadata', function() {
+            // 计算片尾开始时间（默认视频长度的90%处）
+            if (art.video.duration) {
+                outroStart = art.video.duration * 0.9;
+                outroEnd = art.video.duration;
+            }
+        });
+        
+        // 监听视频播放进度，检测是否需要显示跳过按钮
+        art.video.addEventListener('timeupdate', checkSkipConditions);
+        
+        // 监听视频播放开始事件，重置跳过状态
+        art.video.addEventListener('play', function() {
+            introSkipped = false;
+            outroSkipped = false;
+        });
+        
+        // 监听视频加载新源事件，重置跳过状态
+        art.on('url', function() {
+            introSkipped = false;
+            outroSkipped = false;
+            if (skipButton) {
+                skipButton.remove();
+                skipButton = null;
+            }
         });
         
         // 监听画中画模式变化
@@ -1534,6 +1643,273 @@ function showSpeedChangeHint(rate) {
             }, 1500);
         }, 10);
     }
+}
+
+// 初始化智能跳过片首片尾功能
+function initSkipIntroOutro() {
+    // 添加跳过设置到播放器菜单
+    addSkipSettingsToMenu();
+    
+    // 初始化跳过按钮（暂时隐藏）
+    createSkipButton();
+}
+
+// 检查是否满足跳过条件
+function checkSkipConditions() {
+    if (!art || !art.video) return;
+    
+    const currentTime = art.video.currentTime;
+    
+    // 检查是否需要跳过片头
+    if (skipIntroEnabled && !introSkipped && 
+        currentTime >= introStart && currentTime <= introEnd) {
+        showSkipButton('片头', introEnd);
+        return;
+    }
+    
+    // 检查是否需要跳过片尾
+    if (skipOutroEnabled && !outroSkipped && outroStart !== null &&
+        currentTime >= outroStart && currentTime <= outroEnd) {
+        showSkipButton('片尾', outroEnd);
+        return;
+    }
+    
+    // 如果不在片头片尾区域，隐藏跳过按钮
+    if (skipButton && skipButton.style.display !== 'none') {
+        hideSkipButton();
+    }
+}
+
+// 创建跳过按钮
+function createSkipButton() {
+    if (skipButton) return;
+    
+    skipButton = document.createElement('div');
+    skipButton.className = 'skip-button';
+    skipButton.style.cssText = `
+        position: absolute;
+        bottom: 80px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(0, 0, 0, 0.7);
+        color: white;
+        padding: 10px 20px;
+        border-radius: 20px;
+        cursor: pointer;
+        z-index: 1000;
+        opacity: 0;
+        transition: opacity 0.3s ease;
+        font-size: 14px;
+        display: none;
+    `;
+    
+    skipButton.addEventListener('click', function() {
+        const targetTime = parseFloat(skipButton.dataset.targetTime);
+        if (!isNaN(targetTime)) {
+            skipToPosition(targetTime);
+        }
+    });
+    
+    const playerContainer = document.querySelector('#player');
+    if (playerContainer) {
+        playerContainer.appendChild(skipButton);
+    }
+}
+
+// 显示跳过按钮
+function showSkipButton(type, targetTime) {
+    if (!skipButton) createSkipButton();
+    
+    skipButton.textContent = `跳过${type}`;
+    skipButton.dataset.targetTime = targetTime;
+    skipButton.style.display = 'block';
+    
+    // 淡入效果
+    setTimeout(() => {
+        if (skipButton) skipButton.style.opacity = '1';
+    }, 10);
+    
+    // 自动跳过提示
+    setTimeout(() => {
+        if (skipButton && skipButton.style.display !== 'none') {
+            skipButton.textContent = `跳过${type} (3s后自动跳过)`;
+            
+            setTimeout(() => {
+                if (skipButton && skipButton.style.display !== 'none') {
+                    skipButton.textContent = `跳过${type} (2s后自动跳过)`;
+                    
+                    setTimeout(() => {
+                        if (skipButton && skipButton.style.display !== 'none') {
+                            skipButton.textContent = `跳过${type} (1s后自动跳过)`;
+                            
+                            setTimeout(() => {
+                                if (skipButton && skipButton.style.display !== 'none') {
+                                    skipToPosition(targetTime);
+                                }
+                            }, 1000);
+                        }
+                    }, 1000);
+                }
+            }, 1000);
+        }
+    }, 2000);
+}
+
+// 隐藏跳过按钮
+function hideSkipButton() {
+    if (!skipButton) return;
+    
+    skipButton.style.opacity = '0';
+    setTimeout(() => {
+        if (skipButton) skipButton.style.display = 'none';
+    }, 300);
+}
+
+// 执行跳转操作
+function skipToPosition(position) {
+    if (!art || !art.video) return;
+    
+    art.seek = position;
+    hideSkipButton();
+    
+    // 更新跳过状态
+    if (position <= introEnd) {
+        introSkipped = true;
+    } else if (position >= outroStart) {
+        outroSkipped = true;
+    }
+    
+    // 显示跳过成功提示
+    showSkipSuccessHint(position <= introEnd ? '片头' : '片尾');
+}
+
+// 显示跳过成功提示
+function showSkipSuccessHint(type) {
+    const hint = document.createElement('div');
+    hint.className = 'skip-success-hint';
+    hint.innerHTML = `
+        <div class="hint-content">
+            已跳过${type}
+        </div>
+    `;
+    hint.style.cssText = `
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(0, 0, 0, 0.7);
+        color: white;
+        padding: 10px 20px;
+        border-radius: 20px;
+        font-size: 16px;
+        z-index: 1000;
+        opacity: 0;
+        transition: opacity 0.3s;
+    `;
+    
+    const playerContainer = document.querySelector('#player');
+    if (playerContainer) {
+        playerContainer.appendChild(hint);
+        
+        setTimeout(() => {
+            hint.style.opacity = '1';
+            
+            setTimeout(() => {
+                hint.style.opacity = '0';
+                setTimeout(() => hint.remove(), 300);
+            }, 1500);
+        }, 10);
+    }
+}
+
+// 添加跳过设置到播放器菜单
+function addSkipSettingsToMenu() {
+    // 检查是否已经添加过设置
+    if (document.querySelector('.skip-settings-container')) return;
+    
+    // 创建设置容器
+    const settingsPanel = document.querySelector('.artplayer-setting');
+    if (!settingsPanel) return;
+    
+    const skipContainer = document.createElement('div');
+    skipContainer.className = 'skip-settings-container artplayer-setting-item';
+    skipContainer.style.cssText = 'margin: 10px 0;';
+    
+    skipContainer.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <span>跳过片头</span>
+            <label class="switch">
+                <input type="checkbox" id="skipIntroToggle" ${skipIntroEnabled ? 'checked' : ''}>
+                <span class="slider round"></span>
+            </label>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span>跳过片尾</span>
+            <label class="switch">
+                <input type="checkbox" id="skipOutroToggle" ${skipOutroEnabled ? 'checked' : ''}>
+                <span class="slider round"></span>
+            </label>
+        </div>
+    `;
+    
+    // 添加到设置面板的开头
+    settingsPanel.insertBefore(skipContainer, settingsPanel.firstChild);
+    
+    // 添加样式
+    const style = document.createElement('style');
+    style.textContent = `
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 40px;
+            height: 20px;
+        }
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 20px;
+        }
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 16px;
+            width: 16px;
+            left: 2px;
+            bottom: 2px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        input:checked + .slider {
+            background-color: #23ade5;
+        }
+        input:checked + .slider:before {
+            transform: translateX(20px);
+        }
+    `;
+    document.head.appendChild(style);
+    
+    // 添加事件监听
+    document.getElementById('skipIntroToggle').addEventListener('change', function(e) {
+        skipIntroEnabled = e.target.checked;
+        localStorage.setItem('skipIntroEnabled', skipIntroEnabled);
+    });
+    
+    document.getElementById('skipOutroToggle').addEventListener('change', function(e) {
+        skipOutroEnabled = e.target.checked;
+        localStorage.setItem('skipOutroEnabled', skipOutroEnabled);
+    });
 }
 
 // 添加视频质量选择器到设置菜单

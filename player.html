@@ -133,6 +133,14 @@
                         </svg>
                     </button>
                     
+                    <!-- 快捷键帮助按钮 -->
+                    <button id="shortcutHelpButton" onclick="toggleShortcutHelp()" title="快捷键帮助" 
+                            class="px-2 py-1 bg-[#222] hover:bg-[#333] border border-[#333] text-white rounded-lg transition flex-shrink-0">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                    </button>
+
                     <!-- 锁定控制按钮 - 始终显示在最右侧 -->
                     <button id="lockToggle" onclick="toggleControlsLock()" title="锁定控制" 
                             class="px-2 py-1 bg-[#222] hover:bg-[#333] border border-[#333] text-white rounded-lg transition flex-shrink-0">
@@ -193,6 +201,94 @@
             </div>
         </div>
     </footer>
+
+    <!-- 快捷键帮助模态框 -->
+    <div id="shortcutHelpModal" class="fixed inset-0 bg-black/60 hidden flex items-center justify-center transition-opacity duration-300 z-[10000]">
+        <div class="bg-[#111] p-6 rounded-lg w-11/12 max-w-2xl border border-[#333] max-h-[80vh] overflow-y-auto">
+            <div class="flex justify-between items-center mb-6">
+                <h3 class="text-xl font-bold text-white">快捷键帮助</h3>
+                <button onclick="toggleShortcutHelp()" class="text-gray-400 hover:text-white">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- 播放控制 -->
+                <div>
+                    <h4 class="text-white font-medium mb-3 pb-2 border-b border-gray-700">播放控制</h4>
+                    <div class="space-y-2 text-sm">
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">播放/暂停</span>
+                            <kbd class="px-2 py-1 bg-gray-800 text-white rounded">空格</kbd>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">快进 5秒</span>
+                            <kbd class="px-2 py-1 bg-gray-800 text-white rounded">→</kbd>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">快退 5秒</span>
+                            <kbd class="px-2 py-1 bg-gray-800 text-white rounded">←</kbd>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 音量控制 -->
+                <div>
+                    <h4 class="text-white font-medium mb-3 pb-2 border-b border-gray-700">音量控制</h4>
+                    <div class="space-y-2 text-sm">
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">音量增加</span>
+                            <kbd class="px-2 py-1 bg-gray-800 text-white rounded">↑</kbd>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">音量减少</span>
+                            <kbd class="px-2 py-1 bg-gray-800 text-white rounded">↓</kbd>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 播放速度控制 -->
+                <div>
+                    <h4 class="text-white font-medium mb-3 pb-2 border-b border-gray-700">播放速度控制</h4>
+                    <div class="space-y-2 text-sm">
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">降低播放速度</span>
+                            <kbd class="px-2 py-1 bg-gray-800 text-white rounded">[</kbd>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">增加播放速度</span>
+                            <kbd class="px-2 py-1 bg-gray-800 text-white rounded">]</kbd>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">重置为正常速度</span>
+                            <kbd class="px-2 py-1 bg-gray-800 text-white rounded">R</kbd>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 其他控制 -->
+                <div>
+                    <h4 class="text-white font-medium mb-3 pb-2 border-b border-gray-700">其他控制</h4>
+                    <div class="space-y-2 text-sm">
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">切换全屏</span>
+                            <kbd class="px-2 py-1 bg-gray-800 text-white rounded">F</kbd>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">上一集</span>
+                            <kbd class="px-2 py-1 bg-gray-800 text-white rounded">Alt + ←</kbd>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">下一集</span>
+                            <kbd class="px-2 py-1 bg-gray-800 text-white rounded">Alt + →</kbd>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- 换源模态框 -->
     <div id="modal" class="fixed inset-0 bg-black/60 hidden flex items-center justify-center transition-opacity duration-300 z-[10000]">
