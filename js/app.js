@@ -45,7 +45,16 @@ document.addEventListener('DOMContentLoaded', function () {
     // 设置黄色内容过滤器开关初始状态
     const yellowFilterToggle = document.getElementById('yellowFilterToggle');
     if (yellowFilterToggle) {
-        yellowFilterToggle.checked = localStorage.getItem('yellowFilterEnabled') === 'true';
+        // 为了向后兼容，先检查旧的键名，如果不存在再使用默认值true
+        const oldValue = localStorage.getItem('yellowFilterEnabled');
+        const newValue = localStorage.getItem('yellowContentFilterEnabled');
+        // 默认启用过滤
+        const isEnabled = oldValue === null ? (newValue === null ? true : newValue === 'true') : oldValue === 'true';
+        yellowFilterToggle.checked = isEnabled;
+        // 统一使用新的键名存储状态
+        localStorage.setItem('yellowContentFilterEnabled', isEnabled ? 'true' : 'false');
+        // 移除旧的键名以保持清洁
+        localStorage.removeItem('yellowFilterEnabled');
     }
 
     // 设置广告过滤开关初始状态
@@ -158,25 +167,60 @@ function addAdultAPI() {
     }
 }
 
-// 检查是否有成人API被选中
+// 检查是否有成人API被选中，并在过滤启用时自动取消选中成人API
 function checkAdultAPIsSelected() {
+    // 使用新的localStorage键名
+    const isFilterEnabled = localStorage.getItem('yellowContentFilterEnabled') === 'true';
+    
     // 查找所有内置成人API复选框
-    const adultBuiltinCheckboxes = document.querySelectorAll('#apiCheckboxes .api-adult:checked');
-
+    const adultBuiltinCheckboxes = document.querySelectorAll('#apiCheckboxes .api-adult');
+    const checkedAdultBuiltinCheckboxes = document.querySelectorAll('#apiCheckboxes .api-adult:checked');
+    
     // 查找所有自定义成人API复选框
-    const customApiCheckboxes = document.querySelectorAll('#customApisList .api-adult:checked');
-
-    const hasAdultSelected = adultBuiltinCheckboxes.length > 0 || customApiCheckboxes.length > 0;
-
+    const customApiCheckboxes = document.querySelectorAll('#customApisList .api-adult');
+    const checkedCustomApiCheckboxes = document.querySelectorAll('#customApisList .api-adult:checked');
+    
+    const hasAdultSelected = checkedAdultBuiltinCheckboxes.length > 0 || checkedCustomApiCheckboxes.length > 0;
+    
     const yellowFilterToggle = document.getElementById('yellowFilterToggle');
     const yellowFilterContainer = yellowFilterToggle.closest('div').parentNode;
     const filterDescription = yellowFilterContainer.querySelector('p.filter-description');
-
+    
+    // 如果黄色内容过滤启用，自动取消选中并禁用所有成人API
+    if (isFilterEnabled) {
+        // 取消选中所有成人API
+        [...adultBuiltinCheckboxes, ...customApiCheckboxes].forEach(checkbox => {
+            if (checkbox.checked) {
+                checkbox.checked = false;
+                // 为禁用的复选框添加视觉提示
+                const label = checkbox.closest('label');
+                if (label) {
+                    label.classList.add('opacity-50', 'cursor-not-allowed');
+                }
+            }
+            checkbox.disabled = true;
+        });
+        
+        // 如果有取消选中的操作，更新选中的API列表
+        if (hasAdultSelected && typeof updateSelectedAPIs === 'function') {
+            updateSelectedAPIs();
+        }
+    } else {
+        // 如果过滤禁用，启用所有成人API复选框并移除禁用样式
+        [...adultBuiltinCheckboxes, ...customApiCheckboxes].forEach(checkbox => {
+            checkbox.disabled = false;
+            const label = checkbox.closest('label');
+            if (label) {
+                label.classList.remove('opacity-50', 'cursor-not-allowed');
+            }
+        });
+    }
+    
     // 如果选择了成人API，禁用黄色内容过滤器
-    if (hasAdultSelected) {
+    if (hasAdultSelected && !isFilterEnabled) {
         yellowFilterToggle.checked = false;
         yellowFilterToggle.disabled = true;
-        localStorage.setItem('yellowFilterEnabled', 'false');
+        localStorage.setItem('yellowContentFilterEnabled', 'false');
 
         // 添加禁用样式
         yellowFilterContainer.classList.add('filter-disabled');
@@ -194,6 +238,15 @@ function checkAdultAPIsSelected() {
     } else {
         // 启用黄色内容过滤器
         yellowFilterToggle.disabled = false;
+        // 确保使用新的localStorage键名
+        const currentState = localStorage.getItem('yellowContentFilterEnabled');
+        // 如果没有设置过状态，默认启用过滤
+        if (currentState === null) {
+            localStorage.setItem('yellowContentFilterEnabled', 'true');
+            yellowFilterToggle.checked = true;
+        } else {
+            yellowFilterToggle.checked = currentState === 'true';
+        }
         yellowFilterContainer.classList.remove('filter-disabled');
 
         // 恢复原来的描述文字
@@ -535,15 +588,21 @@ function setupEventListeners() {
     const yellowFilterToggle = document.getElementById('yellowFilterToggle');
     if (yellowFilterToggle) {
         yellowFilterToggle.addEventListener('change', function (e) {
-            localStorage.setItem('yellowFilterEnabled', e.target.checked);
+            // 使用新的键名存储状态
+            localStorage.setItem('yellowContentFilterEnabled', e.target.checked ? 'true' : 'false');
+            // 显示提示信息
+            showToast(e.target.checked ? '已开启黄色内容过滤' : '已关闭黄色内容过滤', 'info');
+            
+            // 当过滤状态改变时，调用检查函数来同步API选中状态
+            checkAdultAPIsSelected();
 
             // 控制黄色内容接口的显示状态
             const adultdiv = document.getElementById('adultdiv');
             if (adultdiv) {
                 if (e.target.checked === true) {
-                    adultdiv.style.display = 'none';
+                    adultdiv.style.display = '';
                 } else if (e.target.checked === false) {
-                    adultdiv.style.display = ''
+                    adultdiv.style.display = 'none'
                 }
             } else {
                 // 添加成人API列表
@@ -607,6 +666,44 @@ function getCustomApiInfo(customApiIndex) {
 }
 
 // 搜索功能 - 修改为支持多选API和多页结果
+// 获取筛选条件
+function getFilterConditions() {
+    return {
+        area: document.getElementById('filterArea')?.value || '',
+        year: document.getElementById('filterYear')?.value || '',
+        type: document.getElementById('filterType')?.value || ''
+    };
+}
+
+// 保存筛选条件到localStorage
+function saveFilterConditions(filters) {
+    localStorage.setItem('searchFilters', JSON.stringify(filters));
+}
+
+// 从localStorage加载筛选条件
+function loadFilterConditions() {
+    try {
+        const saved = localStorage.getItem('searchFilters');
+        return saved ? JSON.parse(saved) : {};
+    } catch (e) {
+        console.error('加载筛选条件失败:', e);
+        return {};
+    }
+}
+
+// 应用筛选条件到UI
+function applyFilterConditions(filters) {
+    if (document.getElementById('filterArea')) {
+        document.getElementById('filterArea').value = filters.area || '';
+    }
+    if (document.getElementById('filterYear')) {
+        document.getElementById('filterYear').value = filters.year || '';
+    }
+    if (document.getElementById('filterType')) {
+        document.getElementById('filterType').value = filters.type || '';
+    }
+}
+
 async function search() {
     // 强化的密码保护校验 - 防止绕过
     try {
@@ -626,6 +723,8 @@ async function search() {
         return;
     }
     const query = document.getElementById('searchInput').value.trim();
+    const filters = getFilterConditions();
+    saveFilterConditions(filters);
 
     if (!query) {
         showToast('请输入搜索内容', 'info');
@@ -646,7 +745,7 @@ async function search() {
         // 从所有选中的API源搜索
         let allResults = [];
         const searchPromises = selectedAPIs.map(apiId => 
-            searchByAPIAndKeyWord(apiId, query)
+            searchByAPIAndKeyWord(apiId, query, filters)
         );
 
         // 等待所有搜索请求完成
@@ -659,35 +758,122 @@ async function search() {
         }
     });
 
-    // 对搜索结果进行排序：按多维度智能排序（视频热度、更新时间、用户评分）
-    allResults.sort((a, b) => {
-        // 1. 首先按照视频质量（如清晰度）排序
-        const qualityA = getVideoQualityScore(a);
-        const qualityB = getVideoQualityScore(b);
-        if (qualityA !== qualityB) return qualityB - qualityA;
+    // 计算关键词匹配度评分
+    function calculateKeywordMatchScore(item, keyword) {
+        const title = (item.vod_name || '').toLowerCase();
+        const keywordLower = keyword.toLowerCase();
         
-        // 2. 按照更新时间排序（假设update_time字段存在）
-        const updateTimeA = parseUpdateTime(a.update_time);
-        const updateTimeB = parseUpdateTime(b.update_time);
-        if (updateTimeA && updateTimeB) {
-            const timeDiff = updateTimeB - updateTimeA;
-            if (timeDiff !== 0) return timeDiff;
+        // 完全匹配给最高分
+        if (title === keywordLower) return 100;
+        
+        // 开头匹配给高分
+        if (title.startsWith(keywordLower)) return 90;
+        
+        // 包含关键词
+        if (title.includes(keywordLower)) {
+            // 根据关键词在标题中的位置给予不同分数
+            const index = title.indexOf(keywordLower);
+            return Math.max(50, 80 - Math.floor(index / 5));
         }
         
-        // 3. 按照热度/播放量排序（假设hit字段存在）
-        const hitA = getHitCount(a.hit || a.views || '');
-        const hitB = getHitCount(b.hit || b.views || '');
-        if (hitA !== hitB) return hitB - hitA;
+        // 类型匹配
+        if ((item.type_name || '').toLowerCase().includes(keywordLower)) return 30;
         
-        // 4. 按照用户评分排序（假设rating字段存在）
-        const ratingA = parseFloat(a.rating || '0');
-        const ratingB = parseFloat(b.rating || '0');
-        if (ratingA !== ratingB) return ratingB - ratingA;
+        return 0;
+    }
+    
+    // 获取视频源可靠性评分（基于用户历史数据）
+    function getSourceReliabilityScore(sourceCode, apiUrl) {
+        try {
+            const history = JSON.parse(localStorage.getItem('videoHistory') || '[]');
+            const sourceVideos = history.filter(item => 
+                item.source_code === sourceCode && (!apiUrl || item.api_url === apiUrl)
+            );
+            
+            if (sourceVideos.length === 0) return 50; // 无历史记录给中等分数
+            
+            // 计算平均播放完成率
+            const completedCount = sourceVideos.filter(v => v.play_percentage > 80).length;
+            const reliabilityScore = (completedCount / sourceVideos.length) * 100;
+            
+            return Math.min(100, Math.max(0, reliabilityScore));
+        } catch (e) {
+            console.error('获取源可靠性评分失败:', e);
+            return 50;
+        }
+    }
+    
+    // 获取用户观看历史权重
+    function getUserHistoryWeight(item) {
+        try {
+            const history = JSON.parse(localStorage.getItem('videoHistory') || '[]');
+            const viewedItem = history.find(h => h.vod_id === item.vod_id && h.source_code === item.source_code);
+            
+            if (!viewedItem) return 0;
+            
+            // 最近观看的给予更高权重
+            const daysSinceViewed = Math.floor((Date.now() - viewedItem.last_view_time) / (1000 * 60 * 60 * 24));
+            const recencyScore = Math.max(0, 100 - (daysSinceViewed * 5));
+            
+            // 观看完成度权重
+            const completionScore = viewedItem.play_percentage || 0;
+            
+            return (recencyScore * 0.6 + completionScore * 0.4);
+        } catch (e) {
+            console.error('获取用户历史权重失败:', e);
+            return 0;
+        }
+    }
+    
+    // 综合评分函数
+    function calculateOverallScore(item, keyword) {
+        // 获取各种评分
+        const keywordScore = calculateKeywordMatchScore(item, keyword);
+        const qualityScore = getVideoQualityScore(item);
+        const updateTime = parseUpdateTime(item.update_time);
+        const timeScore = updateTime ? (Date.now() - updateTime) / (1000 * 60 * 60 * 24) : 365;
+        const hitScore = getHitCount(item.hit || item.views || '');
+        const ratingScore = parseFloat(item.rating || '0') * 20; // 转换为0-100分
+        const sourceScore = getSourceReliabilityScore(item.source_code, item.api_url);
+        const historyWeight = getUserHistoryWeight(item);
         
-        // 5. 最后按照视频名称和来源排序
+        // 计算时间衰减分数（越新越高）
+        const freshnessScore = Math.max(0, 100 - (timeScore / 365 * 100));
+        
+        // 计算热度标准化分数
+        const normalizedHitScore = Math.min(100, Math.log10(hitScore + 1) * 25);
+        
+        // 综合加权评分
+        // 关键词匹配最重要，其次是视频质量，然后是热度、新鲜度等
+        const weightedScore = (
+            keywordScore * 0.35 +     // 关键词匹配（35%）
+            qualityScore * 0.25 +     // 视频质量（25%）
+            normalizedHitScore * 0.15 + // 热度（15%）
+            freshnessScore * 0.10 +    // 新鲜度（10%）
+            ratingScore * 0.10 +       // 评分（10%）
+            sourceScore * 0.03 +       // 源可靠性（3%）
+            historyWeight * 0.02       // 用户历史（2%）
+        );
+        
+        return weightedScore;
+    }
+    
+    // 对搜索结果进行优化排序
+    allResults.sort((a, b) => {
+        // 计算综合评分
+        const scoreA = calculateOverallScore(a, query);
+        const scoreB = calculateOverallScore(b, query);
+        
+        // 主要按综合评分排序
+        if (Math.abs(scoreA - scoreB) > 0.1) {
+            return scoreB - scoreA;
+        }
+        
+        // 评分相同时，按视频名称排序
         const nameCompare = (a.vod_name || '').localeCompare(b.vod_name || '');
         if (nameCompare !== 0) return nameCompare;
         
+        // 最后按来源排序
         return (a.source_name || '').localeCompare(b.source_name || '');
     });
 
@@ -730,11 +916,17 @@ async function search() {
         try {
             // 使用URI编码确保特殊字符能够正确显示
             const encodedQuery = encodeURIComponent(query);
+            // 构建包含筛选条件的URL参数
+            let urlParams = `s=${encodedQuery}`;
+            if (filters.area) urlParams += `&area=${encodeURIComponent(filters.area)}`;
+            if (filters.year) urlParams += `&year=${encodeURIComponent(filters.year)}`;
+            if (filters.type) urlParams += `&type=${encodeURIComponent(filters.type)}`;
+            
             // 使用HTML5 History API更新URL，不刷新页面
             window.history.pushState(
-                { search: query },
+                { search: query, filters: filters },
                 `搜索: ${query} - LibreTV`,
-                `/s=${encodedQuery}`
+                `/${urlParams}`
             );
             // 更新页面标题
             document.title = `搜索: ${query} - LibreTV`;
@@ -1113,10 +1305,47 @@ function handleSearchSuggestions(query) {
     // 清空并填充搜索建议
     suggestionsContainer.innerHTML = '';
     
+    // 为每个建议项添加图标和高亮匹配部分
     filteredSuggestions.forEach(item => {
         const suggestionItem = document.createElement('div');
-        suggestionItem.className = 'px-4 py-2 hover:bg-[#252525] cursor-pointer transition-colors';
-        suggestionItem.textContent = item;
+        suggestionItem.className = 'px-4 py-2 hover:bg-[#252525] cursor-pointer transition-colors flex items-center';
+        
+        // 添加搜索图标
+        const icon = document.createElement('svg');
+        icon.className = 'w-4 h-4 text-gray-500 mr-2';
+        icon.setAttribute('fill', 'none');
+        icon.setAttribute('stroke', 'currentColor');
+        icon.setAttribute('viewBox', '0 0 24 24');
+        icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>';
+        
+        // 创建文本节点，高亮匹配部分
+        const textContainer = document.createElement('span');
+        const lowerQuery = query.toLowerCase();
+        const lowerItem = item.toLowerCase();
+        const matchIndex = lowerItem.indexOf(lowerQuery);
+        
+        if (matchIndex !== -1) {
+            // 非匹配部分
+            const beforeMatch = document.createTextNode(item.substring(0, matchIndex));
+            // 匹配部分（高亮）
+            const matchSpan = document.createElement('span');
+            matchSpan.className = 'bg-blue-600 bg-opacity-20 text-blue-300 font-medium';
+            matchSpan.textContent = item.substring(matchIndex, matchIndex + query.length);
+            // 剩余部分
+            const afterMatch = document.createTextNode(item.substring(matchIndex + query.length));
+            
+            textContainer.appendChild(beforeMatch);
+            textContainer.appendChild(matchSpan);
+            textContainer.appendChild(afterMatch);
+        } else {
+            textContainer.textContent = item;
+        }
+        
+        suggestionItem.appendChild(icon);
+        suggestionItem.appendChild(textContainer);
+        
+        // 添加键盘导航支持
+        suggestionItem.tabIndex = 0;
         
         // 点击建议项进行搜索
         suggestionItem.onclick = () => {
@@ -1124,6 +1353,16 @@ function handleSearchSuggestions(query) {
             toggleClearButton();
             hideSearchSuggestions();
             search();
+        };
+        
+        // 回车键触发搜索
+        suggestionItem.onkeydown = (e) => {
+            if (e.key === 'Enter') {
+                document.getElementById('searchInput').value = item;
+                toggleClearButton();
+                hideSearchSuggestions();
+                search();
+            }
         };
         
         suggestionsContainer.appendChild(suggestionItem);
@@ -1143,9 +1382,10 @@ function hideSearchSuggestions() {
 
 // 设置点击外部关闭搜索建议
 function setupSearchSuggestionListeners() {
+    const searchInput = document.getElementById('searchInput');
+    const suggestionsContainer = document.getElementById('searchSuggestions');
+    
     document.addEventListener('click', (e) => {
-        const searchInput = document.getElementById('searchInput');
-        const suggestionsContainer = document.getElementById('searchSuggestions');
         const clearButton = document.getElementById('clearSearchInput');
         
         // 如果点击的不是搜索输入框、搜索建议框或清空按钮，隐藏搜索建议
@@ -1158,9 +1398,87 @@ function setupSearchSuggestionListeners() {
         }
     });
     
+    // 为搜索输入框添加键盘导航支持
+    if (searchInput) {
+        searchInput.addEventListener('keydown', (e) => {
+            if (!suggestionsContainer || suggestionsContainer.classList.contains('hidden')) return;
+            
+            const suggestions = suggestionsContainer.querySelectorAll('div[tabindex="0"]');
+            if (!suggestions || suggestions.length === 0) return;
+            
+            let activeIndex = -1;
+            
+            // 找到当前活动的建议项
+            for (let i = 0; i < suggestions.length; i++) {
+                if (suggestions[i] === document.activeElement) {
+                    activeIndex = i;
+                    break;
+                }
+            }
+            
+            // 处理上下箭头键
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                const nextIndex = activeIndex < suggestions.length - 1 ? activeIndex + 1 : 0;
+                suggestions[nextIndex].focus();
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                const prevIndex = activeIndex > 0 ? activeIndex - 1 : suggestions.length - 1;
+                suggestions[prevIndex].focus();
+            } else if (e.key === 'Escape') {
+                // 按ESC键隐藏建议并聚焦到搜索框
+                hideSearchSuggestions();
+                searchInput.focus();
+            }
+        });
+        
+        // 当搜索框获得焦点时，如果有内容则显示建议
+        searchInput.addEventListener('focus', () => {
+            if (searchInput.value.trim()) {
+                handleSearchSuggestions(searchInput.value);
+            }
+        });
+    }
+    
     // 初始化最近搜索显示
     updateRecentSearches();
 }
+
+// 初始化筛选条件
+function initializeFilters() {
+    // 动态生成年份选项
+    const yearSelect = document.getElementById('filterYear');
+    if (yearSelect) {
+        const currentYear = new Date().getFullYear();
+        // 生成近30年的年份选项
+        for (let year = currentYear; year >= currentYear - 30; year--) {
+            const option = document.createElement('option');
+            option.value = year;
+            option.textContent = year + '年';
+            yearSelect.appendChild(option);
+        }
+    }
+    
+    // 加载并应用保存的筛选条件
+    const savedFilters = loadFilterConditions();
+    applyFilterConditions(savedFilters);
+    
+    // 从URL参数加载筛选条件（如果有）
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlFilters = {
+        area: urlParams.get('area') || '',
+        year: urlParams.get('year') || '',
+        type: urlParams.get('type') || ''
+    };
+    
+    if (urlFilters.area || urlFilters.year || urlFilters.type) {
+        applyFilterConditions(urlFilters);
+        saveFilterConditions(urlFilters);
+    }
+}
+
+// 在DOM加载完成后初始化筛选条件
+document.addEventListener('DOMContentLoaded', initializeFilters);
 
 // 劫持搜索框的value属性以检测外部修改
 function hookInput() {

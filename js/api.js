@@ -1,13 +1,20 @@
 // 改进的API请求处理函数
-// 增强的fetch函数，支持重试机制
-async function fetchWithRetry(url, options = {}, retries = 2, retryDelay = 1000) {
+// 增强的fetch函数，支持重试机制，带详细日志
+async function fetchWithRetry(url, options = {}, retries = 3, retryDelay = 1500) {
     let lastError;
+    const targetUrl = options.targetUrl || url;
+    
+    console.log(`[API请求] 开始请求 ${targetUrl}`);
     
     for (let attempt = 0; attempt <= retries; attempt++) {
         try {
             // 创建一个新的AbortController用于每次尝试
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), options.timeout || 10000);
+            const timeout = options.timeout || 15000; // 增加默认超时时间
+            const timeoutId = setTimeout(() => {
+                console.warn(`[API请求] 尝试 ${attempt+1} 超时 (${timeout}ms): ${targetUrl}`);
+                controller.abort();
+            }, timeout);
             
             try {
                 // 合并AbortSignal到选项
@@ -16,19 +23,22 @@ async function fetchWithRetry(url, options = {}, retries = 2, retryDelay = 1000)
                     signal: controller.signal
                 };
                 
+                console.log(`[API请求] 尝试 ${attempt+1}/${retries+1}: ${url}`);
                 const response = await fetch(url, fetchOptions);
                 clearTimeout(timeoutId);
                 
                 if (response.ok) {
+                    console.log(`[API请求] 成功: ${targetUrl}`);
                     return response;
                 } else if (response.status >= 500 && response.status < 600 && attempt < retries) {
                     // 服务器错误，可重试
-                    console.warn(`请求失败 (${response.status})，${retryDelay}ms后重试 (${attempt+1}/${retries})`);
+                    console.warn(`[API请求] 服务器错误 (${response.status})，${retryDelay}ms后重试 (${attempt+1}/${retries}): ${targetUrl}`);
                     lastError = new Error(`服务器错误: ${response.status}`);
                     await new Promise(resolve => setTimeout(resolve, retryDelay));
                     continue;
                 } else {
                     // 其他错误，不可重试
+                    console.error(`[API请求] HTTP错误 (${response.status}): ${targetUrl}`);
                     throw new Error(`HTTP错误: ${response.status}`);
                 }
             } catch (fetchError) {
@@ -36,21 +46,26 @@ async function fetchWithRetry(url, options = {}, retries = 2, retryDelay = 1000)
                 
                 // 网络错误或超时错误，可以重试
                 if ((!fetchError.name || fetchError.name === 'TypeError' || fetchError.name === 'AbortError') && attempt < retries) {
-                    console.warn(`网络错误，${retryDelay}ms后重试 (${attempt+1}/${retries})`);
+                    const errorType = fetchError.name === 'AbortError' ? '超时' : '网络错误';
+                    console.warn(`[API请求] ${errorType}，${retryDelay}ms后重试 (${attempt+1}/${retries}): ${targetUrl}`);
                     lastError = fetchError;
                     await new Promise(resolve => setTimeout(resolve, retryDelay));
                     continue;
                 } else {
+                    console.error(`[API请求] 无法重试的错误: ${fetchError.message}: ${targetUrl}`);
                     throw fetchError;
                 }
             }
         } catch (error) {
+            console.error(`[API请求] 尝试 ${attempt+1} 失败: ${error.message}: ${targetUrl}`);
             lastError = error;
         }
     }
     
     // 所有重试都失败，抛出最后一个错误
-    throw lastError || new Error('所有重试均失败');
+    const finalError = lastError || new Error('所有重试均失败');
+    console.error(`[API请求] 所有尝试失败: ${finalError.message}: ${targetUrl}`);
+    throw finalError;
 }
 
 // 解析错误类型，提供更具体的错误提示
@@ -59,6 +74,11 @@ function getSpecificErrorMessage(error) {
     
     const errorMessage = error.message || String(error);
     
+    // 连接拒绝错误 - 这是我们重点处理的错误类型
+    if (errorMessage.includes('ERR_CONNECTION_REFUSED') || errorMessage.includes('ECONNREFUSED')) {
+        return '连接被拒绝，请检查目标服务器是否可访问，可能是网络限制或服务器不可用';
+    }
+    
     // 网络错误
     if (errorMessage.includes('NetworkError') || errorMessage.includes('Failed to fetch')) {
         return '网络连接失败，请检查您的网络设置';
@@ -66,12 +86,17 @@ function getSpecificErrorMessage(error) {
     
     // 超时错误
     if (errorMessage.includes('timeout') || error.name === 'AbortError') {
-        return '请求超时，服务器响应时间过长';
+        return '请求超时，服务器响应时间过长，可能是网络延迟或服务器负载过高';
     }
     
     // 404错误
     if (errorMessage.includes('404')) {
-        return '请求的资源不存在';
+        return '请求的资源不存在，可能是API端点已变更';
+    }
+    
+    // 401错误 - 认证失败
+    if (errorMessage.includes('401')) {
+        return '代理认证失败，请检查密码设置或重新验证密码';
     }
     
     // 服务器错误
@@ -88,6 +113,16 @@ function getSpecificErrorMessage(error) {
         return '无法获取视频详情，可能是视频ID无效或数据源已更新';
     }
     
+    // 跨域错误
+    if (errorMessage.includes('CORS') || errorMessage.includes('cross-origin')) {
+        return '跨域访问受限，请确认代理服务器配置正确';
+    }
+    
+    // DNS解析错误
+    if (errorMessage.includes('ENOTFOUND') || errorMessage.includes('getaddrinfo')) {
+        return '无法解析目标服务器地址，请检查网络连接或DNS设置';
+    }
+    
     // 默认错误消息
     return errorMessage;
 }
@@ -96,6 +131,9 @@ async function handleApiRequest(url) {
     const customApi = url.searchParams.get('customApi') || '';
     const customDetail = url.searchParams.get('customDetail') || '';
     const source = url.searchParams.get('source') || 'heimuer';
+    const requestId = `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`; // 生成请求ID以便跟踪
+    
+    console.log(`[请求处理] ${requestId} 开始处理请求: ${url.pathname}, 来源: ${source}`);
     
     try {
         if (url.pathname === '/api/search') {
@@ -117,9 +155,15 @@ async function handleApiRequest(url) {
                 ? `${customApi}${API_CONFIG.search.path}${encodeURIComponent(searchQuery)}`
                 : `${API_SITES[source].api}${API_CONFIG.search.path}${encodeURIComponent(searchQuery)}`;
             
-            // 添加超时处理
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000);
+            // 验证API URL格式
+            if (!apiUrl.match(/^https?:\/\/.+/i)) {
+                throw new Error(`无效的API URL格式: ${apiUrl}`);
+            }
+            
+            // 检查代理认证模块是否可用
+            if (!window.ProxyAuth || !window.ProxyAuth.addAuthToProxyUrl) {
+                console.warn(`[请求处理] ${requestId} 代理认证模块不可用，尝试使用备用方式`);
+            }
             
             try {
                 // 添加鉴权参数到代理URL
@@ -127,18 +171,33 @@ async function handleApiRequest(url) {
                     await window.ProxyAuth.addAuthToProxyUrl(PROXY_URL + encodeURIComponent(apiUrl)) :
                     PROXY_URL + encodeURIComponent(apiUrl);
                     
-                const response = await fetchWithRetry(proxiedUrl, {
-                        headers: API_CONFIG.search.headers,
-                        timeout: 10000
-                    });
+                console.log(`[请求处理] ${requestId} 请求代理URL: ${proxiedUrl.substring(0, 100)}...`);
                 
-                clearTimeout(timeoutId);
+                const response = await fetchWithRetry(proxiedUrl, {
+                    headers: API_CONFIG.search.headers,
+                    timeout: 15000, // 增加超时时间
+                    targetUrl: apiUrl // 传递原始目标URL用于日志
+                });
                 
                 if (!response.ok) {
-                    throw new Error(`API请求失败: ${response.status}`);
+                    // 尝试获取错误响应体
+                    let errorBody = '';
+                    try {
+                        errorBody = await response.text();
+                    } catch (e) {}
+                    
+                    const errorMsg = `API请求失败: ${response.status} ${errorBody.substring(0, 200)}`;
+                    console.error(`[请求处理] ${requestId} ${errorMsg}`);
+                    throw new Error(errorMsg);
                 }
                 
-                const data = await response.json();
+                // 安全地解析JSON
+                let data;
+                try {
+                    data = await response.json();
+                } catch (jsonError) {
+                    throw new Error('API返回的不是有效的JSON格式');
+                }
                 
                 // 检查JSON格式的有效性
                 if (!data || !Array.isArray(data.list)) {
@@ -155,12 +214,23 @@ async function handleApiRequest(url) {
                     }
                 });
                 
+                console.log(`[请求处理] ${requestId} 成功获取 ${data.list.length} 条结果`);
+                
                 return JSON.stringify({
                     code: 200,
                     list: data.list || [],
                 });
             } catch (fetchError) {
-                clearTimeout(timeoutId);
+                // 特殊处理连接拒绝错误
+                if (fetchError.message.includes('ERR_CONNECTION_REFUSED') || 
+                    fetchError.message.includes('ECONNREFUSED')) {
+                    console.error(`[请求处理] ${requestId} 连接拒绝错误: 无法连接到 ${apiUrl}`);
+                    // 尝试使用其他API源作为备选
+                    if (source !== 'custom' && Object.keys(API_SITES).length > 1) {
+                        console.log(`[请求处理] ${requestId} 尝试使用备选API源`);
+                        // 这里可以实现故障转移逻辑
+                    }
+                }
                 throw fetchError;
             }
         }
@@ -448,12 +518,35 @@ async function handleSpecialSourceDetail(id, sourceCode) {
     }
 }
 
+// 检查黄色内容过滤是否启用
+function isYellowContentFilterEnabled() {
+    // 为了向后兼容，先检查新的键名，如果不存在再检查旧的键名
+    const newValue = localStorage.getItem('yellowContentFilterEnabled');
+    const oldValue = localStorage.getItem('yellowFilterEnabled');
+    
+    // 如果新键存在，使用新键值；如果新键不存在但旧键存在，使用旧键值；如果都不存在，默认启用过滤
+    if (newValue !== null) {
+        return newValue === 'true';
+    } else if (oldValue !== null) {
+        return oldValue === 'true';
+    }
+    // 默认启用过滤
+    return true;
+}
+
 // 处理聚合搜索
 async function handleAggregatedSearch(searchQuery) {
     // 获取可用的API源列表（排除aggregated和custom）
-    const availableSources = Object.keys(API_SITES).filter(key => 
+    let availableSources = Object.keys(API_SITES).filter(key => 
         key !== 'aggregated' && key !== 'custom'
     );
+    
+    // 如果启用了黄色内容过滤，排除成人内容源
+    if (isYellowContentFilterEnabled()) {
+        availableSources = availableSources.filter(key => 
+            API_SITES[key]?.is_adult !== true && API_SITES[key]?.adult !== true
+        );
+    }
     
     if (availableSources.length === 0) {
         throw new Error('没有可用的API源');

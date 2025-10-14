@@ -1,5 +1,65 @@
-async function searchByAPIAndKeyWord(apiId, query) {
+// 构建带筛选条件的查询字符串
+function buildQueryString(query, filters = {}) {
+    let queryStr = `?ac=videolist&wd=${encodeURIComponent(query)}`;
+    
+    // 添加筛选条件
+    if (filters.area) {
+        queryStr += `&area=${encodeURIComponent(filters.area)}`;
+    }
+    if (filters.year) {
+        queryStr += `&year=${encodeURIComponent(filters.year)}`;
+    }
+    if (filters.type) {
+        queryStr += `&type=${encodeURIComponent(filters.type)}`;
+    }
+    
+    return queryStr;
+}
+
+// 构建带筛选条件的分页查询字符串
+function buildPageQueryString(query, page, filters = {}) {
+    let queryStr = `?ac=videolist&wd=${encodeURIComponent(query)}&pg=${page}`;
+    
+    // 添加筛选条件
+    if (filters.area) {
+        queryStr += `&area=${encodeURIComponent(filters.area)}`;
+    }
+    if (filters.year) {
+        queryStr += `&year=${encodeURIComponent(filters.year)}`;
+    }
+    if (filters.type) {
+        queryStr += `&type=${encodeURIComponent(filters.type)}`;
+    }
+    
+    return queryStr;
+}
+
+// 检查黄色内容过滤是否启用
+function isYellowContentFilterEnabled() {
+    // 为了向后兼容，先检查新的键名，如果不存在再检查旧的键名
+    const newValue = localStorage.getItem('yellowContentFilterEnabled');
+    const oldValue = localStorage.getItem('yellowFilterEnabled');
+    
+    // 如果新键存在，使用新键值；如果新键不存在但旧键存在，使用旧键值；如果都不存在，默认启用过滤
+    if (newValue !== null) {
+        return newValue === 'true';
+    } else if (oldValue !== null) {
+        return oldValue === 'true';
+    }
+    // 默认启用过滤
+    return true;
+}
+
+async function searchByAPIAndKeyWord(apiId, query, filters = {}) {
     try {
+        // 如果启用了黄色内容过滤，检查当前API是否为成人内容源
+        if (isYellowContentFilterEnabled() && !apiId.startsWith('custom_')) {
+            const apiSource = API_SITES[apiId];
+            if (apiSource && (apiSource.is_adult === true || apiSource.adult === true)) {
+                return []; // 跳过成人内容源
+            }
+        }
+        
         let apiUrl, apiName, apiBaseUrl;
         
         // 处理自定义API
@@ -9,13 +69,13 @@ async function searchByAPIAndKeyWord(apiId, query) {
             if (!customApi) return [];
             
             apiBaseUrl = customApi.url;
-            apiUrl = apiBaseUrl + API_CONFIG.search.path + encodeURIComponent(query);
+            apiUrl = apiBaseUrl + buildQueryString(query, filters);
             apiName = customApi.name;
         } else {
             // 内置API
             if (!API_SITES[apiId]) return [];
             apiBaseUrl = API_SITES[apiId].api;
-            apiUrl = apiBaseUrl + API_CONFIG.search.path + encodeURIComponent(query);
+            apiUrl = apiBaseUrl + buildQueryString(query, filters);
             apiName = API_SITES[apiId].name;
         }
         
@@ -63,10 +123,8 @@ async function searchByAPIAndKeyWord(apiId, query) {
             const additionalPagePromises = [];
             
             for (let page = 2; page <= pagesToFetch + 1; page++) {
-                // 构建分页URL
-                const pageUrl = apiBaseUrl + API_CONFIG.search.pagePath
-                    .replace('{query}', encodeURIComponent(query))
-                    .replace('{page}', page);
+                // 构建带筛选条件的分页URL
+                const pageUrl = apiBaseUrl + buildPageQueryString(query, page, filters);
                 
                 // 创建获取额外页的Promise
                 const pagePromise = (async () => {
@@ -79,10 +137,11 @@ async function searchByAPIAndKeyWord(apiId, query) {
                             await window.ProxyAuth.addAuthToProxyUrl(PROXY_URL + encodeURIComponent(pageUrl)) :
                             PROXY_URL + encodeURIComponent(pageUrl);
                         
-                        const pageResponse = await fetch(proxiedPageUrl, {
+                        const pageResponse = await fetchWithRetry(proxiedPageUrl, {
                             headers: API_CONFIG.search.headers,
-                            signal: pageController.signal
-                        });
+                            signal: pageController.signal,
+                            timeout: 15000
+                        }, 2, 1000);
                         
                         clearTimeout(pageTimeoutId);
                         

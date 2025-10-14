@@ -91,6 +91,9 @@ let shortcutHintTimeout = null; // 用于控制快捷键提示显示时间
 let adFilteringEnabled = true; // 默认开启广告过滤
 let progressSaveInterval = null; // 定期保存进度的计时器
 let currentVideoUrl = ''; // 记录当前实际的视频URL
+let currentPlaybackRate = 1.0; // 当前播放速度
+let videoQualityLevels = []; // 视频质量级别列表
+let currentQualityIndex = -1; // 当前选中的质量索引
 const isWebkit = (typeof window.webkitConvertPointFromNodeToPage === 'function')
 Artplayer.FULLSCREEN_WEB_IN_BODY = true;
 
@@ -408,35 +411,47 @@ function initPlayer(videoUrl) {
         art = null;
     }
 
-    // 配置HLS.js选项
+    // 配置HLS.js选项，优化加载策略
     const hlsConfig = {
         debug: false,
         loader: adFilteringEnabled ? CustomHlsJsLoader : Hls.DefaultConfig.loader,
         enableWorker: true,
         lowLatencyMode: false,
-        backBufferLength: 90,
-        maxBufferLength: 30,
-        maxMaxBufferLength: 60,
-        maxBufferSize: 30 * 1000 * 1000,
+        backBufferLength: 30, // 减少回退缓冲，加快响应
+        maxBufferLength: 15, // 减少最大缓冲长度，减少加载时间
+        maxMaxBufferLength: 45,
+        maxBufferSize: 20 * 1000 * 1000, // 减少最大缓冲区大小
         maxBufferHole: 0.5,
-        fragLoadingMaxRetry: 6,
-        fragLoadingMaxRetryTimeout: 64000,
+        fragLoadingMaxRetry: 3, // 优化重试次数
+        fragLoadingMaxRetryTimeout: 32000,
         fragLoadingRetryDelay: 1000,
-        manifestLoadingMaxRetry: 3,
-        manifestLoadingRetryDelay: 1000,
-        levelLoadingMaxRetry: 4,
-        levelLoadingRetryDelay: 1000,
+        manifestLoadingMaxRetry: 2,
+        manifestLoadingRetryDelay: 800,
+        levelLoadingMaxRetry: 3,
+        levelLoadingRetryDelay: 800,
         startLevel: -1,
-        abrEwmaDefaultEstimate: 500000,
-        abrBandWidthFactor: 0.95,
-        abrBandWidthUpFactor: 0.7,
+        abrEwmaDefaultEstimate: 300000, // 优化带宽估计
+        abrBandWidthFactor: 0.9,
+        abrBandWidthUpFactor: 0.6,
         abrMaxWithRealBitrate: true,
         stretchShortVideoTrack: true,
-        appendErrorMaxRetry: 5,  // 增加尝试次数
+        appendErrorMaxRetry: 3, // 优化尝试次数
         liveSyncDurationCount: 3,
-        liveDurationInfinity: false
+        liveDurationInfinity: false,
+        // 新增预加载设置
+        fragLoadingSetup: function(loader, context, callbacks) {
+            // 优先加载关键帧片段
+            if (context.frag && context.frag.isKeyframe) {
+                loader.setPriority(High);
+            }
+            return loader.load(context, callbacks);
+        }
     };
 
+    // 从localStorage加载保存的播放速度
+    const savedRateKey = `playbackRate_${getVideoId()}`;
+    currentPlaybackRate = parseFloat(localStorage.getItem(savedRateKey) || '1.0');
+    
     // Create new ArtPlayer instance
     art = new Artplayer({
         container: '#player',
@@ -454,7 +469,7 @@ function initPlayer(videoUrl) {
         setting: true,
         loop: false,
         flip: false,
-        playbackRate: true,
+        playbackRate: true, // 设置为布尔值以启用播放速度控制
         aspectRatio: false,
         fullscreen: true,
         fullscreenWeb: true,
@@ -470,6 +485,8 @@ function initPlayer(videoUrl) {
         lang: navigator.language.toLowerCase(),
         moreVideoAttr: {
             crossOrigin: 'anonymous',
+            // 添加画中画支持
+            disablePictureInPicture: false
         },
         customType: {
             m3u8: function (video, url) {
@@ -527,6 +544,61 @@ function initPlayer(videoUrl) {
                 video.disableRemotePlayback = false;
 
                 hls.on(Hls.Events.MANIFEST_PARSED, function () {
+                    // 存储可用的质量级别
+                    if (hls.levels && hls.levels.length > 0) {
+                        videoQualityLevels = [];
+                        hls.levels.forEach((level, index) => {
+                            // 尝试从名称或带宽计算质量描述
+                            let qualityName = level.height ? `${level.height}p` : `清晰度 ${index + 1}`;
+                            if (level.bitrate) {
+                                // 添加带宽信息
+                                qualityName += ` (${Math.round(level.bitrate / 1000000 * 10) / 10}Mbps)`;
+                            }
+                            videoQualityLevels.push({
+                                index: index,
+                                name: qualityName,
+                                bitrate: level.bitrate || 0,
+                                height: level.height
+                            });
+                        });
+                        
+                        // 按高度和比特率降序排序
+                        videoQualityLevels.sort((a, b) => {
+                            const aHeight = a.height || 0;
+                            const bHeight = b.height || 0;
+                            if (bHeight !== aHeight) {
+                                return bHeight - aHeight;
+                            }
+                            return b.bitrate - a.bitrate;
+                        });
+                        
+                        // 从localStorage加载保存的质量设置
+                        const savedQualityKey = `videoQuality_${getVideoId()}`;
+                        const savedQualityIndex = parseInt(localStorage.getItem(savedQualityKey) || '-1');
+                        
+                        // 如果有保存的质量设置且有效，则应用
+                        if (savedQualityIndex >= 0 && savedQualityIndex < videoQualityLevels.length) {
+                            currentQualityIndex = savedQualityIndex;
+                            hls.loadLevel = videoQualityLevels[savedQualityIndex].index;
+                        }
+                        
+                        // 添加质量选择器到播放器设置菜单
+                        setTimeout(() => {
+                            addQualitySelectorToSettings();
+                        }, 500);
+                    }
+                    
+                    // 应用保存的播放速度
+                    if (video && currentPlaybackRate !== 1.0) {
+                        video.playbackRate = currentPlaybackRate;
+                    }
+                    
+                    // 视频加载成功，隐藏错误提示
+                    const errorContainer = document.getElementById('errorContainer');
+                    if (errorContainer) {
+                        errorContainer.style.display = 'none';
+                    }
+                    
                     video.play().catch(e => {
                     });
                 });
@@ -637,6 +709,37 @@ function initPlayer(videoUrl) {
     // 播放器加载完成后初始隐藏工具栏
     art.on('ready', () => {
         hideControls();
+        
+        // 应用保存的播放速度
+        if (currentPlaybackRate !== 1.0) {
+            art.plugins.playbackRate.switchPlaybackRate(currentPlaybackRate);
+        }
+        
+        // 监听播放速度变化事件，保存用户选择的速度
+        art.on('playbackRateChange', (rate) => {
+            currentPlaybackRate = rate;
+            const savedRateKey = `playbackRate_${getVideoId()}`;
+            localStorage.setItem(savedRateKey, rate.toString());
+            showSpeedChangeHint(rate);
+        });
+        
+        // 监听画中画模式变化
+        if (document.pictureInPictureEnabled && art.video) {
+            art.video.addEventListener('enterpictureinpicture', () => {
+                console.log('进入画中画模式');
+                const pipButton = document.querySelector('.artplayer-pip-button');
+                if (pipButton) pipButton.classList.add('active');
+            });
+            
+            art.video.addEventListener('leavepictureinpicture', () => {
+                console.log('离开画中画模式');
+                const pipButton = document.querySelector('.artplayer-pip-button');
+                if (pipButton) pipButton.classList.remove('active');
+            });
+            
+            // 设置画中画按钮
+            setupPictureInPictureButton();
+        }
     });
 
     // 全屏 Web 模式处理
@@ -685,7 +788,13 @@ function initPlayer(videoUrl) {
         setupProgressBarPreciseClicks();
 
         // 视频加载成功后，在稍微延迟后将其添加到观看历史
-        setTimeout(saveToHistory, 3000);
+    setTimeout(saveToHistory, 3000);
+
+        // 确保视频元素属性正确设置，支持画中画
+        if (art.video) {
+            art.video.playsInline = true;
+            art.video.disablePictureInPicture = false;
+        }
 
         // 启动定期保存播放进度
         startProgressSaveInterval();
@@ -1382,6 +1491,244 @@ function setupLongPressSpeedControl() {
             clearTimeout(longPressTimer);
             longPressTimer = null;
         }
+    });
+}
+
+// 显示播放速度变化提示
+function showSpeedChangeHint(rate) {
+    const hint = document.createElement('div');
+    hint.className = 'speed-change-hint';
+    hint.innerHTML = `
+        <div class="hint-content">
+            ${rate}x 速度
+        </div>
+    `;
+    hint.style.cssText = `
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(0, 0, 0, 0.7);
+        color: white;
+        padding: 10px 20px;
+        border-radius: 20px;
+        font-size: 18px;
+        z-index: 1000;
+        opacity: 0;
+        transition: opacity 0.3s;
+    `;
+    
+    // 添加到播放器容器
+    const playerContainer = document.querySelector('#player');
+    if (playerContainer) {
+        playerContainer.appendChild(hint);
+        
+        // 显示提示
+        setTimeout(() => {
+            hint.style.opacity = '1';
+            
+            // 1.5秒后隐藏
+            setTimeout(() => {
+                hint.style.opacity = '0';
+                setTimeout(() => hint.remove(), 300);
+            }, 1500);
+        }, 10);
+    }
+}
+
+// 添加视频质量选择器到设置菜单
+function addQualitySelectorToSettings() {
+    if (videoQualityLevels.length === 0 || !art) return;
+    
+    // 检查是否已经添加过质量选择器
+    if (document.querySelector('.quality-selector-container')) return;
+    
+    // 创建质量选择器容器
+    const settingsPanel = document.querySelector('.artplayer-setting');
+    if (!settingsPanel) return;
+    
+    // 从localStorage加载保存的质量设置
+    const savedQualityKey = `videoQuality_${getVideoId()}`;
+    const savedQualityIndex = parseInt(localStorage.getItem(savedQualityKey) || '-1');
+    
+    // 如果有保存的质量设置且有效，则应用
+    if (savedQualityIndex >= 0 && savedQualityIndex < videoQualityLevels.length) {
+        currentQualityIndex = savedQualityIndex;
+        if (currentHls) {
+            currentHls.loadLevel = videoQualityLevels[savedQualityIndex].index;
+        }
+    }
+    
+    // 在设置面板中添加质量选择器
+    const qualitySection = document.createElement('div');
+    qualitySection.className = 'quality-selector-container artplayer-setting-item';
+    qualitySection.innerHTML = `
+        <div class="artplayer-setting-label">视频质量</div>
+        <div class="artplayer-setting-value">自动</div>
+        <div class="artplayer-setting-menu quality-menu">
+            <div class="artplayer-setting-menu-item quality-auto active" data-index="-1">自动</div>
+        </div>
+    `;
+    
+    // 添加质量选项
+    const qualityMenu = qualitySection.querySelector('.quality-menu');
+    videoQualityLevels.forEach((level, idx) => {
+        const menuItem = document.createElement('div');
+        menuItem.className = `artplayer-setting-menu-item quality-option ${savedQualityIndex === idx ? 'active' : ''}`;
+        menuItem.setAttribute('data-index', idx);
+        menuItem.textContent = level.name;
+        qualityMenu.appendChild(menuItem);
+    });
+    
+    // 添加到设置面板顶部
+    const firstSetting = settingsPanel.querySelector('.artplayer-setting-item');
+    if (firstSetting) {
+        settingsPanel.insertBefore(qualitySection, firstSetting);
+    } else {
+        settingsPanel.appendChild(qualitySection);
+    }
+    
+    // 添加点击事件
+    qualitySection.querySelector('.artplayer-setting-label, .artplayer-setting-value').addEventListener('click', (e) => {
+        const menu = qualitySection.querySelector('.artplayer-setting-menu');
+        menu.style.display = menu.style.display === 'block' ? 'none' : 'block';
+        e.stopPropagation();
+    });
+    
+    // 质量选项点击事件
+    qualityMenu.querySelectorAll('.artplayer-setting-menu-item').forEach(item => {
+        item.addEventListener('click', function() {
+            const index = parseInt(this.getAttribute('data-index'));
+            
+            // 更新选中状态
+            qualityMenu.querySelectorAll('.artplayer-setting-menu-item').forEach(i => i.classList.remove('active'));
+            this.classList.add('active');
+            
+            // 更新显示值
+            qualitySection.querySelector('.artplayer-setting-value').textContent = 
+                index === -1 ? '自动' : this.textContent;
+            
+            // 隐藏菜单
+            qualityMenu.style.display = 'none';
+            
+            // 应用质量设置
+            if (currentHls) {
+                currentQualityIndex = index;
+                currentHls.loadLevel = index;
+                
+                // 保存到localStorage
+                localStorage.setItem(savedQualityKey, index.toString());
+                
+                // 显示质量变化提示
+                showQualityChangeHint(index === -1 ? '自动' : this.textContent);
+            }
+        });
+    });
+    
+    // 点击其他区域关闭菜单
+    document.addEventListener('click', () => {
+        qualityMenu.style.display = 'none';
+    });
+}
+
+// 显示质量变化提示
+function showQualityChangeHint(quality) {
+    const hint = document.createElement('div');
+    hint.className = 'quality-change-hint';
+    hint.innerHTML = `
+        <div class="hint-content">
+            ${quality}
+        </div>
+    `;
+    hint.style.cssText = `
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(0, 0, 0, 0.7);
+        color: white;
+        padding: 10px 20px;
+        border-radius: 20px;
+        font-size: 18px;
+        z-index: 1000;
+        opacity: 0;
+        transition: opacity 0.3s;
+    `;
+    
+    // 添加到播放器容器
+    const playerContainer = document.querySelector('#player');
+    if (playerContainer) {
+        playerContainer.appendChild(hint);
+        
+        // 显示提示
+        setTimeout(() => {
+            hint.style.opacity = '1';
+            
+            // 1.5秒后隐藏
+            setTimeout(() => {
+                hint.style.opacity = '0';
+                setTimeout(() => hint.remove(), 300);
+            }, 1500);
+        }, 10);
+    }
+}
+
+// 设置画中画按钮
+function setupPictureInPictureButton() {
+    if (!art || !art.video) return;
+    
+    // 检查是否已经添加过画中画按钮
+    if (document.querySelector('.artplayer-pip-button')) return;
+    
+    // 创建画中画按钮
+    const controlsRight = document.querySelector('.artplayer-controller-right');
+    if (!controlsRight) return;
+    
+    // 寻找全屏按钮作为参考位置
+    const fullscreenButton = document.querySelector('.artplayer-fullscreen');
+    if (!fullscreenButton) return;
+    
+    const pipButton = document.createElement('div');
+    pipButton.className = 'artplayer-pip-button artplayer-icon artplayer-controller-button';
+    pipButton.innerHTML = `
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M19 7h-8v6h8V7zm2-4H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H3V5h18v14z"/>
+        </svg>
+    `;
+    pipButton.style.cssText = `
+        width: 40px;
+        height: 40px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+    `;
+    
+    // 在全屏按钮前插入画中画按钮
+    controlsRight.insertBefore(pipButton, fullscreenButton);
+    
+    // 添加点击事件
+    pipButton.addEventListener('click', async () => {
+        try {
+            if (document.pictureInPictureElement) {
+                // 退出画中画模式
+                await document.exitPictureInPicture();
+            } else if (document.pictureInPictureEnabled && art.video) {
+                // 进入画中画模式
+                await art.video.requestPictureInPicture();
+            }
+        } catch (error) {
+            console.error('画中画模式切换失败:', error);
+        }
+    });
+    
+    // 监听画中画状态变化，更新按钮样式
+    art.video.addEventListener('enterpictureinpicture', () => {
+        pipButton.classList.add('active');
+    });
+    
+    art.video.addEventListener('leavepictureinpicture', () => {
+        pipButton.classList.remove('active');
     });
 }
 
