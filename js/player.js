@@ -572,6 +572,15 @@ function initPlayer(videoUrl) {
             // 添加画中画支持
             disablePictureInPicture: false
         },
+        // 添加自定义控制按钮 - 问号图标用于打开快捷键帮助
+        controls: [
+            {
+                position: 'right',
+                html: '<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>',
+                tooltip: '快捷键帮助',
+                click: toggleShortcutHelp
+            }
+        ],
         customType: {
             m3u8: function (video, url) {
                 // 清理之前的HLS实例
