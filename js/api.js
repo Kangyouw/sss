@@ -1,4 +1,97 @@
 // 改进的API请求处理函数
+// 增强的fetch函数，支持重试机制
+async function fetchWithRetry(url, options = {}, retries = 2, retryDelay = 1000) {
+    let lastError;
+    
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            // 创建一个新的AbortController用于每次尝试
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), options.timeout || 10000);
+            
+            try {
+                // 合并AbortSignal到选项
+                const fetchOptions = {
+                    ...options,
+                    signal: controller.signal
+                };
+                
+                const response = await fetch(url, fetchOptions);
+                clearTimeout(timeoutId);
+                
+                if (response.ok) {
+                    return response;
+                } else if (response.status >= 500 && response.status < 600 && attempt < retries) {
+                    // 服务器错误，可重试
+                    console.warn(`请求失败 (${response.status})，${retryDelay}ms后重试 (${attempt+1}/${retries})`);
+                    lastError = new Error(`服务器错误: ${response.status}`);
+                    await new Promise(resolve => setTimeout(resolve, retryDelay));
+                    continue;
+                } else {
+                    // 其他错误，不可重试
+                    throw new Error(`HTTP错误: ${response.status}`);
+                }
+            } catch (fetchError) {
+                clearTimeout(timeoutId);
+                
+                // 网络错误或超时错误，可以重试
+                if ((!fetchError.name || fetchError.name === 'TypeError' || fetchError.name === 'AbortError') && attempt < retries) {
+                    console.warn(`网络错误，${retryDelay}ms后重试 (${attempt+1}/${retries})`);
+                    lastError = fetchError;
+                    await new Promise(resolve => setTimeout(resolve, retryDelay));
+                    continue;
+                } else {
+                    throw fetchError;
+                }
+            }
+        } catch (error) {
+            lastError = error;
+        }
+    }
+    
+    // 所有重试都失败，抛出最后一个错误
+    throw lastError || new Error('所有重试均失败');
+}
+
+// 解析错误类型，提供更具体的错误提示
+function getSpecificErrorMessage(error) {
+    if (!error) return '未知错误';
+    
+    const errorMessage = error.message || String(error);
+    
+    // 网络错误
+    if (errorMessage.includes('NetworkError') || errorMessage.includes('Failed to fetch')) {
+        return '网络连接失败，请检查您的网络设置';
+    }
+    
+    // 超时错误
+    if (errorMessage.includes('timeout') || error.name === 'AbortError') {
+        return '请求超时，服务器响应时间过长';
+    }
+    
+    // 404错误
+    if (errorMessage.includes('404')) {
+        return '请求的资源不存在';
+    }
+    
+    // 服务器错误
+    if (errorMessage.includes('50') || errorMessage.includes('服务器错误')) {
+        return '服务器暂时不可用，请稍后再试';
+    }
+    
+    // API特定错误
+    if (errorMessage.includes('API返回的数据格式无效')) {
+        return '数据源返回的数据格式有误，可能是数据源已更新';
+    }
+    
+    if (errorMessage.includes('获取到的详情内容无效')) {
+        return '无法获取视频详情，可能是视频ID无效或数据源已更新';
+    }
+    
+    // 默认错误消息
+    return errorMessage;
+}
+
 async function handleApiRequest(url) {
     const customApi = url.searchParams.get('customApi') || '';
     const customDetail = url.searchParams.get('customDetail') || '';
@@ -34,10 +127,10 @@ async function handleApiRequest(url) {
                     await window.ProxyAuth.addAuthToProxyUrl(PROXY_URL + encodeURIComponent(apiUrl)) :
                     PROXY_URL + encodeURIComponent(apiUrl);
                     
-                const response = await fetch(proxiedUrl, {
-                    headers: API_CONFIG.search.headers,
-                    signal: controller.signal
-                });
+                const response = await fetchWithRetry(proxiedUrl, {
+                        headers: API_CONFIG.search.headers,
+                        timeout: 10000
+                    });
                 
                 clearTimeout(timeoutId);
                 
@@ -123,10 +216,10 @@ async function handleApiRequest(url) {
                     await window.ProxyAuth.addAuthToProxyUrl(PROXY_URL + encodeURIComponent(detailUrl)) :
                     PROXY_URL + encodeURIComponent(detailUrl);
                     
-                const response = await fetch(proxiedUrl, {
-                    headers: API_CONFIG.detail.headers,
-                    signal: controller.signal
-                });
+                const response = await fetchWithRetry(proxiedUrl, {
+                        headers: API_CONFIG.detail.headers,
+                        timeout: 10000
+                    });
                 
                 clearTimeout(timeoutId);
                 
@@ -432,16 +525,81 @@ async function handleAggregatedSearch(searchQuery) {
             });
         }
         
-        // 去重（根据vod_id和source_code组合）
+        // 增强去重：通过视频名称、ID等特征识别不同来源的相同内容
         const uniqueResults = [];
-        const seen = new Set();
+        const seenByVodId = new Set();  // 按ID去重
+        const seenByContentHash = new Set();  // 按内容特征去重
+        
+        // 清理视频名称（移除清晰度、年份、版本等信息）
+        function cleanVideoName(name) {
+            if (!name) return '';
+            // 移除清晰度信息
+            name = name.replace(/(4k|2k|1080p|720p|480p|高清|超清)/gi, '');
+            // 移除年份信息
+            name = name.replace(/(\d{4}年|\d{4})/gi, '');
+            // 移除版本信息
+            name = name.replace(/(未删减版|完整版|删减版|修复版|重制版|导演剪辑版|加长版)/gi, '');
+            // 移除空格和特殊字符
+            name = name.replace(/[\s\u00A0\-\_\(\)\[\]\{\}\.\,\:\;\！\？]/g, '').trim();
+            return name;
+        }
+        
+        // 生成内容哈希值
+        function generateContentHash(item) {
+            const cleanName = cleanVideoName(item.vod_name);
+            const typeName = (item.type_name || '').toLowerCase();
+            const year = (item.vod_year || '').toString().slice(0, 4);
+            
+            // 基础哈希由清理后的名称和类型组成
+            let baseHash = `${cleanName}_${typeName}`;
+            
+            // 如果有年份信息，也加入哈希
+            if (year && /^\d{4}$/.test(year)) {
+                baseHash = `${baseHash}_${year}`;
+            }
+            
+            return baseHash;
+        }
         
         allResults.forEach(item => {
-            const key = `${item.source_code}_${item.vod_id}`;
-            if (!seen.has(key)) {
-                seen.add(key);
-                uniqueResults.push(item);
+            // 1. 先按vod_id和source_code组合去重（确保同一来源的相同视频不重复）
+            const uniqueIdKey = `${item.source_code}_${item.vod_id}`;
+            if (seenByVodId.has(uniqueIdKey)) {
+                return;
             }
+            
+            // 2. 再按内容特征去重（识别不同来源的相同内容）
+            const contentHash = generateContentHash(item);
+            
+            // 如果内容特征已存在，选择质量更高的来源
+            if (seenByContentHash.has(contentHash)) {
+                // 查找已存在的相似项索引
+                const existingIndex = uniqueResults.findIndex(uniqueItem => 
+                    generateContentHash(uniqueItem) === contentHash
+                );
+                
+                if (existingIndex !== -1) {
+                    const existingItem = uniqueResults[existingIndex];
+                    
+                    // 比较视频质量（简单实现：假设某些源提供更高质量的视频）
+                    const qualitySources = ['tyyszy', 'bfzy', 'dyttzy']; // 高质量源列表
+                    const existingQuality = qualitySources.includes(existingItem.source_code) ? 1 : 0;
+                    const newQuality = qualitySources.includes(item.source_code) ? 1 : 0;
+                    
+                    // 如果新来源质量更高，则替换现有项
+                    if (newQuality > existingQuality) {
+                        uniqueResults[existingIndex] = item;
+                        seenByVodId.delete(`${existingItem.source_code}_${existingItem.vod_id}`);
+                        seenByVodId.add(uniqueIdKey);
+                    }
+                }
+                return;
+            }
+            
+            // 添加新结果
+            seenByVodId.add(uniqueIdKey);
+            seenByContentHash.add(contentHash);
+            uniqueResults.push(item);
         });
         
         // 按照视频名称和来源排序
@@ -459,13 +617,14 @@ async function handleAggregatedSearch(searchQuery) {
             list: uniqueResults,
         });
     } catch (error) {
-        console.error('聚合搜索处理错误:', error);
-        return JSON.stringify({
-            code: 400,
-            msg: '聚合搜索处理失败: ' + error.message,
-            list: []
-        });
-    }
+            console.error('聚合搜索处理错误:', error);
+            const specificError = getSpecificErrorMessage(error);
+            return JSON.stringify({
+                code: 400,
+                msg: specificError,
+                list: []
+            });
+        }
 }
 
 // 处理多个自定义API源的聚合搜索
@@ -547,16 +706,71 @@ async function handleMultipleCustomSearch(searchQuery, customApiUrls) {
             });
         }
         
-        // 去重（根据vod_id和api_url组合）
+        // 增强去重：通过视频名称、ID等特征识别不同来源的相同内容
         const uniqueResults = [];
-        const seen = new Set();
+        const seenByVodId = new Set();  // 按ID去重
+        const seenByContentHash = new Set();  // 按内容特征去重
+        
+        // 清理视频名称（移除清晰度、年份、版本等信息）
+        function cleanVideoName(name) {
+            if (!name) return '';
+            // 移除清晰度信息
+            name = name.replace(/(4k|2k|1080p|720p|480p|高清|超清)/gi, '');
+            // 移除年份信息
+            name = name.replace(/(\d{4}年|\d{4})/gi, '');
+            // 移除版本信息
+            name = name.replace(/(未删减版|完整版|删减版|修复版|重制版|导演剪辑版|加长版)/gi, '');
+            // 移除空格和特殊字符
+            name = name.replace(/[\s\u00A0\-\_\(\)\[\]\{\}\.\,\:\;\！\？]/g, '').trim();
+            return name;
+        }
+        
+        // 生成内容哈希值
+        function generateContentHash(item) {
+            const cleanName = cleanVideoName(item.vod_name);
+            const typeName = (item.type_name || '').toLowerCase();
+            const year = (item.vod_year || '').toString().slice(0, 4);
+            
+            // 基础哈希由清理后的名称和类型组成
+            let baseHash = `${cleanName}_${typeName}`;
+            
+            // 如果有年份信息，也加入哈希
+            if (year && /^\d{4}$/.test(year)) {
+                baseHash = `${baseHash}_${year}`;
+            }
+            
+            return baseHash;
+        }
         
         allResults.forEach(item => {
-            const key = `${item.api_url || ''}_${item.vod_id}`;
-            if (!seen.has(key)) {
-                seen.add(key);
-                uniqueResults.push(item);
+            // 1. 先按vod_id和api_url组合去重（确保同一来源的相同视频不重复）
+            const uniqueIdKey = `${item.api_url || ''}_${item.vod_id}`;
+            if (seenByVodId.has(uniqueIdKey)) {
+                return;
             }
+            
+            // 2. 再按内容特征去重（识别不同来源的相同内容）
+            const contentHash = generateContentHash(item);
+            
+            // 如果内容特征已存在，选择质量更高的来源
+            if (seenByContentHash.has(contentHash)) {
+                // 查找已存在的相似项索引
+                const existingIndex = uniqueResults.findIndex(uniqueItem => 
+                    generateContentHash(uniqueItem) === contentHash
+                );
+                
+                if (existingIndex !== -1) {
+                    // 自定义API没有质量源列表，所以简单比较响应速度（假设先返回的质量更高）
+                    // 在实际应用中，可以扩展这个逻辑
+                    return;
+                }
+                return;
+            }
+            
+            // 添加新结果
+            seenByVodId.add(uniqueIdKey);
+            seenByContentHash.add(contentHash);
+            uniqueResults.push(item);
         });
         
         return JSON.stringify({
@@ -564,13 +778,14 @@ async function handleMultipleCustomSearch(searchQuery, customApiUrls) {
             list: uniqueResults,
         });
     } catch (error) {
-        console.error('自定义API聚合搜索处理错误:', error);
-        return JSON.stringify({
-            code: 400,
-            msg: '自定义API聚合搜索处理失败: ' + error.message,
-            list: []
-        });
-    }
+            console.error('自定义API聚合搜索处理错误:', error);
+            const specificError = getSpecificErrorMessage(error);
+            return JSON.stringify({
+                code: 400,
+                msg: specificError,
+                list: []
+            });
+        }
 }
 
 // 拦截API请求

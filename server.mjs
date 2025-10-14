@@ -3,6 +3,7 @@ import express from 'express';
 import axios from 'axios';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
@@ -68,10 +69,10 @@ app.get(['/', '/index.html', '/player.html'], async (req, res) => {
     let filePath;
     switch (req.path) {
       case '/player.html':
-        filePath = path.join(__dirname, 'player.html');
+        filePath = join(__dirname, 'player.html');
         break;
       default: // '/' 和 '/index.html'
-        filePath = path.join(__dirname, 'index.html');
+        filePath = join(__dirname, 'index.html');
         break;
     }
     
@@ -85,7 +86,7 @@ app.get(['/', '/index.html', '/player.html'], async (req, res) => {
 
 app.get('/s=:keyword', async (req, res) => {
   try {
-    const filePath = path.join(__dirname, 'index.html');
+    const filePath = join(__dirname, 'index.html');
     const content = await renderPage(filePath, config.password);
     res.send(content);
   } catch (error) {

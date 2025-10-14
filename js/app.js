@@ -59,6 +59,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // 初始检查成人API选中状态
     setTimeout(checkAdultAPIsSelected, 100);
+    
+    // 初始化搜索建议功能
+    setupSearchSuggestionListeners();
 });
 
 // 初始化API复选框
@@ -647,24 +650,46 @@ async function search() {
         );
 
         // 等待所有搜索请求完成
-        const resultsArray = await Promise.all(searchPromises);
+    const resultsArray = await Promise.all(searchPromises);
 
-        // 合并所有结果
-        resultsArray.forEach(results => {
-            if (Array.isArray(results) && results.length > 0) {
-                allResults = allResults.concat(results);
-            }
-        });
+    // 合并所有结果
+    resultsArray.forEach(results => {
+        if (Array.isArray(results) && results.length > 0) {
+            allResults = allResults.concat(results);
+        }
+    });
 
-        // 对搜索结果进行排序：按名称优先，名称相同时按接口源排序
-        allResults.sort((a, b) => {
-            // 首先按照视频名称排序
-            const nameCompare = (a.vod_name || '').localeCompare(b.vod_name || '');
-            if (nameCompare !== 0) return nameCompare;
-            
-            // 如果名称相同，则按照来源排序
-            return (a.source_name || '').localeCompare(b.source_name || '');
-        });
+    // 对搜索结果进行排序：按多维度智能排序（视频热度、更新时间、用户评分）
+    allResults.sort((a, b) => {
+        // 1. 首先按照视频质量（如清晰度）排序
+        const qualityA = getVideoQualityScore(a);
+        const qualityB = getVideoQualityScore(b);
+        if (qualityA !== qualityB) return qualityB - qualityA;
+        
+        // 2. 按照更新时间排序（假设update_time字段存在）
+        const updateTimeA = parseUpdateTime(a.update_time);
+        const updateTimeB = parseUpdateTime(b.update_time);
+        if (updateTimeA && updateTimeB) {
+            const timeDiff = updateTimeB - updateTimeA;
+            if (timeDiff !== 0) return timeDiff;
+        }
+        
+        // 3. 按照热度/播放量排序（假设hit字段存在）
+        const hitA = getHitCount(a.hit || a.views || '');
+        const hitB = getHitCount(b.hit || b.views || '');
+        if (hitA !== hitB) return hitB - hitA;
+        
+        // 4. 按照用户评分排序（假设rating字段存在）
+        const ratingA = parseFloat(a.rating || '0');
+        const ratingB = parseFloat(b.rating || '0');
+        if (ratingA !== ratingB) return ratingB - ratingA;
+        
+        // 5. 最后按照视频名称和来源排序
+        const nameCompare = (a.vod_name || '').localeCompare(b.vod_name || '');
+        if (nameCompare !== 0) return nameCompare;
+        
+        return (a.source_name || '').localeCompare(b.source_name || '');
+    });
 
         // 更新搜索结果计数
         const searchResultsCount = document.getElementById('searchResultsCount');
@@ -821,12 +846,320 @@ function toggleClearButton() {
     }
 }
 
+// 获取视频质量分数
+function getVideoQualityScore(video) {
+    try {
+        // 根据视频清晰度计算分数
+        const title = (video.vod_name || '').toLowerCase();
+        const description = (video.vod_desc || '').toLowerCase();
+        const tags = ((video.tags || '') + (video.type_name || '')).toLowerCase();
+        
+        const allText = title + ' ' + description + ' ' + tags;
+        
+        // 定义清晰度权重
+        const qualityKeywords = [
+            { keywords: ['4k', '2160p'], weight: 10 },
+            { keywords: ['2k', '1440p'], weight: 8 },
+            { keywords: ['1080p', 'fullhd'], weight: 6 },
+            { keywords: ['720p', 'hd'], weight: 4 },
+            { keywords: ['480p'], weight: 2 },
+            { keywords: ['360p', 'sd'], weight: 1 }
+        ];
+        
+        // 定义视频类型权重
+        const typeKeywords = [
+            { keywords: ['无删', '完整版', '未删减'], score: 5 },
+            { keywords: ['高清', '超清'], score: 3 },
+            { keywords: ['抢先', '预告'], score: -2 },
+            { keywords: ['枪版', '盗版', 'ts版'], score: -5 }
+        ];
+        
+        let score = 3; // 默认分数
+        
+        // 计算清晰度分数
+        for (const { keywords, weight } of qualityKeywords) {
+            if (keywords.some(keyword => allText.includes(keyword))) {
+                score = weight;
+                break;
+            }
+        }
+        
+        // 计算类型分数
+        for (const { keywords, weight } of typeKeywords) {
+            if (keywords.some(keyword => allText.includes(keyword))) {
+                score += weight;
+            }
+        }
+        
+        // 确保分数在合理范围内
+        return Math.max(0, Math.min(10, score));
+    } catch (error) {
+        console.error('计算视频质量分数失败:', error);
+        return 3; // 默认分数
+    }
+}
+
+// 解析更新时间
+function parseUpdateTime(updateTimeStr) {
+    try {
+        if (!updateTimeStr || typeof updateTimeStr !== 'string') {
+            return null;
+        }
+        
+        // 处理相对时间
+        if (updateTimeStr.includes('分钟前') || updateTimeStr.includes('小时前')) {
+            return Date.now();
+        }
+        
+        if (updateTimeStr.includes('今天') || updateTimeStr.includes('昨天')) {
+            const today = new Date();
+            if (updateTimeStr.includes('昨天')) {
+                today.setDate(today.getDate() - 1);
+            }
+            return today.getTime();
+        }
+        
+        // 处理具体日期格式
+        const datePatterns = [
+            // 匹配 YYYY-MM-DD, YYYY/MM/DD, YYYY.MM.DD
+            /(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/,
+            // 匹配 MM-DD-YYYY, MM/DD/YYYY, MM.DD.YYYY
+            /(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/,
+            // 匹配 YYYY年MM月DD日
+            /(\d{4})年(\d{1,2})月(\d{1,2})日/
+        ];
+        
+        for (const pattern of datePatterns) {
+            const match = updateTimeStr.match(pattern);
+            if (match) {
+                let year, month, day;
+                
+                if (match[3].length === 4) {
+                    // MM-DD-YYYY 格式
+                    [, month, day, year] = match;
+                } else {
+                    // YYYY-MM-DD 或 YYYY年MM月DD日 格式
+                    [, year, month, day] = match;
+                }
+                
+                const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+                if (!isNaN(date.getTime())) {
+                    return date.getTime();
+                }
+            }
+        }
+        
+        return null;
+    } catch (error) {
+        console.error('解析更新时间失败:', error);
+        return null;
+    }
+}
+
+// 解析热度/播放量
+function getHitCount(hitStr) {
+    try {
+        if (!hitStr || typeof hitStr !== 'string') {
+            return 0;
+        }
+        
+        // 移除所有非数字和单位字符
+        const cleaned = hitStr.replace(/[^\d.]+/g, '');
+        
+        // 提取数字部分
+        const numMatch = cleaned.match(/\d+(\.\d+)?/);
+        if (!numMatch) {
+            return 0;
+        }
+        
+        let count = parseFloat(numMatch[0]);
+        
+        // 检查单位并乘以相应的倍数
+        if (hitStr.includes('亿')) {
+            count *= 100000000;
+        } else if (hitStr.includes('万')) {
+            count *= 10000;
+        } else if (hitStr.includes('千')) {
+            count *= 1000;
+        }
+        
+        return Math.floor(count);
+    } catch (error) {
+        console.error('解析热度计数失败:', error);
+        return 0;
+    }
+}
+
 // 清空搜索框内容
 function clearSearchInput() {
     const searchInput = document.getElementById('searchInput');
     searchInput.value = '';
     const clearButton = document.getElementById('clearSearchInput');
     clearButton.classList.add('hidden');
+    // 清空搜索框时隐藏搜索建议
+    hideSearchSuggestions();
+}
+
+// 获取搜索历史记录
+function getSearchHistory() {
+    try {
+        const historyStr = localStorage.getItem('searchHistory');
+        return historyStr ? JSON.parse(historyStr) : [];
+    } catch (error) {
+        console.error('获取搜索历史失败:', error);
+        return [];
+    }
+}
+
+// 保存搜索历史记录
+function saveSearchHistory(query) {
+    try {
+        if (!query || query.trim().length === 0) return;
+        
+        const history = getSearchHistory();
+        const MAX_HISTORY = 10;
+        
+        // 移除重复的搜索词
+        const filteredHistory = history.filter(item => item.toLowerCase() !== query.toLowerCase());
+        
+        // 将新搜索词添加到开头
+        filteredHistory.unshift(query);
+        
+        // 保持历史记录不超过最大数量
+        if (filteredHistory.length > MAX_HISTORY) {
+            filteredHistory.splice(MAX_HISTORY);
+        }
+        
+        localStorage.setItem('searchHistory', JSON.stringify(filteredHistory));
+        
+        // 更新最近搜索显示
+        updateRecentSearches();
+    } catch (error) {
+        console.error('保存搜索历史失败:', error);
+    }
+}
+
+// 更新最近搜索显示
+function updateRecentSearches() {
+    const container = document.getElementById('recentSearches');
+    if (!container) return;
+    
+    const history = getSearchHistory();
+    
+    if (history.length === 0) {
+        container.innerHTML = '';
+        return;
+    }
+    
+    container.innerHTML = '';
+    
+    // 添加清除历史按钮
+    const clearHistoryBtn = document.createElement('button');
+    clearHistoryBtn.className = 'text-gray-400 hover:text-gray-300 text-sm px-3 py-1 bg-[#1a1a1a] rounded-full';
+    clearHistoryBtn.innerHTML = '<svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg> 清除历史';
+    clearHistoryBtn.onclick = clearSearchHistory;
+    container.appendChild(clearHistoryBtn);
+    
+    // 添加历史搜索项
+    history.forEach(item => {
+        const historyItem = document.createElement('button');
+        historyItem.className = 'text-gray-300 hover:text-white text-sm px-3 py-1 bg-[#1a1a1a] rounded-full';
+        historyItem.textContent = item;
+        historyItem.onclick = () => {
+            document.getElementById('searchInput').value = item;
+            toggleClearButton();
+            hideSearchSuggestions();
+            search();
+        };
+        container.appendChild(historyItem);
+    });
+}
+
+// 清除搜索历史
+function clearSearchHistory() {
+    try {
+        localStorage.removeItem('searchHistory');
+        document.getElementById('recentSearches').innerHTML = '';
+    } catch (error) {
+        console.error('清除搜索历史失败:', error);
+    }
+}
+
+// 处理搜索建议
+function handleSearchSuggestions(query) {
+    const suggestionsContainer = document.getElementById('searchSuggestions');
+    if (!suggestionsContainer) return;
+    
+    // 如果查询为空，隐藏建议
+    if (!query || query.trim().length === 0) {
+        hideSearchSuggestions();
+        return;
+    }
+    
+    // 获取搜索历史
+    const history = getSearchHistory();
+    
+    // 过滤匹配的搜索建议
+    const filteredSuggestions = history.filter(item => 
+        item.toLowerCase().includes(query.toLowerCase())
+    );
+    
+    // 如果没有匹配的建议，隐藏下拉框
+    if (filteredSuggestions.length === 0) {
+        hideSearchSuggestions();
+        return;
+    }
+    
+    // 清空并填充搜索建议
+    suggestionsContainer.innerHTML = '';
+    
+    filteredSuggestions.forEach(item => {
+        const suggestionItem = document.createElement('div');
+        suggestionItem.className = 'px-4 py-2 hover:bg-[#252525] cursor-pointer transition-colors';
+        suggestionItem.textContent = item;
+        
+        // 点击建议项进行搜索
+        suggestionItem.onclick = () => {
+            document.getElementById('searchInput').value = item;
+            toggleClearButton();
+            hideSearchSuggestions();
+            search();
+        };
+        
+        suggestionsContainer.appendChild(suggestionItem);
+    });
+    
+    // 显示搜索建议
+    suggestionsContainer.classList.remove('hidden');
+}
+
+// 隐藏搜索建议
+function hideSearchSuggestions() {
+    const suggestionsContainer = document.getElementById('searchSuggestions');
+    if (suggestionsContainer) {
+        suggestionsContainer.classList.add('hidden');
+    }
+}
+
+// 设置点击外部关闭搜索建议
+function setupSearchSuggestionListeners() {
+    document.addEventListener('click', (e) => {
+        const searchInput = document.getElementById('searchInput');
+        const suggestionsContainer = document.getElementById('searchSuggestions');
+        const clearButton = document.getElementById('clearSearchInput');
+        
+        // 如果点击的不是搜索输入框、搜索建议框或清空按钮，隐藏搜索建议
+        if (searchInput && suggestionsContainer && clearButton) {
+            if (!searchInput.contains(e.target) && 
+                !suggestionsContainer.contains(e.target) && 
+                !clearButton.contains(e.target)) {
+                hideSearchSuggestions();
+            }
+        }
+    });
+    
+    // 初始化最近搜索显示
+    updateRecentSearches();
 }
 
 // 劫持搜索框的value属性以检测外部修改
