@@ -553,7 +553,7 @@ function initPlayer(videoUrl) {
         setting: true,
         loop: false,
         flip: false,
-        playbackRate: true, // 启用播放速度功能，布尔值类型
+        playbackRate: playbackRateConfig, // 启用自定义播放速度功能
         aspectRatio: false,
         fullscreen: true,
         fullscreenWeb: true,
@@ -814,20 +814,28 @@ function initPlayer(videoUrl) {
         hideControls();
         
         // 应用保存的播放速度
-        if (currentPlaybackRate !== 1.0) {
-            art.plugins.playbackRate.switchPlaybackRate(currentPlaybackRate);
-        }
-        
-        // 监听播放速度变化事件，保存用户选择的速度
-        art.on('playbackRateChange', (rate) => {
-            currentPlaybackRate = rate;
-            const savedRateKey = `playbackRate_${getVideoId()}`;
-            localStorage.setItem(savedRateKey, rate.toString());
-            showSpeedChangeHint(rate);
-        });
-        
-        // 初始化智能跳过功能
-        initSkipIntroOutro();
+            if (currentPlaybackRate !== 1.0 && art.plugins && art.plugins.playbackRate && art.plugins.playbackRate.switchPlaybackRate) {
+                art.plugins.playbackRate.switchPlaybackRate(currentPlaybackRate);
+            }
+            
+            // 监听播放速度变化事件，保存用户选择的速度
+            art.on('playbackRateChange', (rate) => {
+                currentPlaybackRate = rate;
+                const savedRateKey = `playbackRate_${getVideoId()}`;
+                localStorage.setItem(savedRateKey, rate.toString());
+                // 确保showSpeedChangeHint函数存在再调用
+                if (typeof showSpeedChangeHint === 'function') {
+                    showSpeedChangeHint(rate);
+                }
+            });
+            
+            // 立即初始化智能跳过功能，确保用户控制界面正确显示
+            initSkipIntroOutro();
+            
+            // 额外添加一个延时调用，确保设置面板已经完全渲染
+            setTimeout(() => {
+                initSkipIntroOutro();
+            }, 1000);
         
         // 设置视频元数据加载事件，计算片尾时间
         art.video.addEventListener('loadedmetadata', function() {
@@ -1794,7 +1802,22 @@ function hideSkipButton() {
 function skipToPosition(position) {
     if (!art || !art.video) return;
     
-    art.seek = position;
+    // 使用正确的seek方法调用形式
+    try {
+        if (typeof art.seek === 'function') {
+            art.seek(position);
+        } else if (art.video) {
+            // 备用方案：直接设置视频元素的currentTime
+            art.video.currentTime = position;
+        }
+        console.log(`跳过到位置: ${position}秒`);
+    } catch (e) {
+        console.warn('跳转视频位置时出错:', e);
+        // 最后的备用方案
+        if (art.video) {
+            art.video.currentTime = position;
+        }
+    }
     hideSkipButton();
     
     // 更新跳过状态
@@ -1849,12 +1872,59 @@ function showSkipSuccessHint(type) {
 
 // 添加跳过设置到播放器菜单
 function addSkipSettingsToMenu() {
+    console.log('添加跳过设置到播放器菜单');
     // 检查是否已经添加过设置
-    if (document.querySelector('.skip-settings-container')) return;
+    if (document.querySelector('.skip-settings-container')) {
+        console.log('跳过设置已经存在');
+        return;
+    }
     
-    // 创建设置容器
-    const settingsPanel = document.querySelector('.artplayer-setting');
-    if (!settingsPanel) return;
+    // 创建设置容器 - 尝试多种可能的设置面板选择器
+    let settingsPanel = document.querySelector('.artplayer-setting');
+    
+    // 如果找不到标准的设置面板，尝试其他可能的选择器
+    if (!settingsPanel) {
+        settingsPanel = document.querySelector('.artplayer-setting-panel');
+    }
+    
+    if (!settingsPanel) {
+        console.warn('未找到播放器设置面板，将尝试手动创建设置按钮和面板');
+        
+        // 如果播放器实例存在，尝试通过API访问设置面板
+        if (art && art.template && art.template.setting) {
+            settingsPanel = art.template.setting;
+            console.log('通过播放器API获取到设置面板');
+        }
+    }
+    
+    // 如果仍然找不到设置面板，创建一个临时的跳过设置区域
+    if (!settingsPanel) {
+        console.warn('无法访问播放器设置面板，创建临时跳过设置区域');
+        
+        // 查找播放器容器
+        const playerContainer = document.querySelector('#player');
+        if (!playerContainer) {
+            console.error('找不到播放器容器');
+            return;
+        }
+        
+        // 创建一个明显的临时设置区域
+        const tempSettings = document.createElement('div');
+        tempSettings.className = 'skip-settings-container temp-settings';
+        tempSettings.style.cssText = `
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 1000;
+            font-size: 12px;
+        `;
+        playerContainer.appendChild(tempSettings);
+        settingsPanel = tempSettings;
+    }
     
     const skipContainer = document.createElement('div');
     skipContainer.className = 'skip-settings-container artplayer-setting-item';
@@ -1877,8 +1947,14 @@ function addSkipSettingsToMenu() {
         </div>
     `;
     
-    // 添加到设置面板的开头
-    settingsPanel.insertBefore(skipContainer, settingsPanel.firstChild);
+    // 添加到设置面板
+    if (settingsPanel.firstChild) {
+        settingsPanel.insertBefore(skipContainer, settingsPanel.firstChild);
+    } else {
+        settingsPanel.appendChild(skipContainer);
+    }
+    
+    console.log('跳过设置已添加到播放器菜单');
     
     // 添加样式
     const style = document.createElement('style');
