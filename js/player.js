@@ -4,6 +4,14 @@ const customAPIs = JSON.parse(localStorage.getItem('customAPIs') || '[]'); // �
 // 定义可用的播放速度选项
 const playbackRates = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
 
+// 播放器设置
+let playerSettings = {
+    skipIntro: false,
+    skipOutro: false,
+    introStart: 0,
+    introEnd: 90
+};
+
 // 性能优化：预定义常用的DOM选择器缓存
 const domCache = {};
 const getCachedElement = (selector) => {
@@ -591,8 +599,14 @@ function initPlayer(videoUrl) {
             // 添加画中画支持
             disablePictureInPicture: false
         },
-        // 添加自定义控制按钮 - 问号图标用于打开快捷键帮助
+        // 添加自定义控制按钮
         controls: [
+            {
+                position: 'right',
+                html: '<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M12 15.5A3.5 3.5 0 0 1 8.5 12A3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5a3.5 3.5 0 0 1-3.5 3.5m7.43-2.57c.75-.75.75-1.97 0-2.72L18.28 8.7a1.97 1.97 0 0 0-2.72 0l-1.5 1.5a1.97 1.97 0 0 0 0 2.72l1.5 1.5a1.97 1.97 0 0 0 2.72 0M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10s10-4.47 10-10S17.53 2 12 2m0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8s8 3.59 8 8s-3.59 8-8 8Z"/></svg>',
+                tooltip: '播放器设置',
+                click: toggleSettingsPanel
+            },
             {
                 position: 'right',
                 html: '<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>',
@@ -876,9 +890,13 @@ function initPlayer(videoUrl) {
             // 立即初始化智能跳过功能，确保用户控制界面正确显示
             initSkipIntroOutro();
             
+            // 初始化播放器设置
+            initPlayerSettings();
+            
             // 额外添加一个延时调用，确保设置面板已经完全渲染
             setTimeout(() => {
                 initSkipIntroOutro();
+                initPlayerSettings();
             }, 1000);
         
         // 设置视频元数据加载事件，计算片尾时间
@@ -2657,5 +2675,123 @@ async function switchToResource(sourceKey, vodId) {
         showToast('切换资源失败，请稍后重试', 'error');
     } finally {
         hideLoading();
+    }
+}
+
+// 初始化播放器设置
+function initPlayerSettings() {
+    // 从localStorage加载设置
+    const savedSettings = localStorage.getItem('playerSettings');
+    if (savedSettings) {
+        try {
+            playerSettings = { ...playerSettings, ...JSON.parse(savedSettings) };
+        } catch (e) {
+            console.error('解析播放器设置失败:', e);
+        }
+    }
+    
+    // 更新UI控件状态
+    updateSettingsUI();
+    
+    // 监听视频播放进度，实现自动跳过功能
+    if (window.player) {
+        window.player.on('timeupdate', handleTimeUpdate);
+    }
+}
+
+// 更新设置UI
+function updateSettingsUI() {
+    const skipIntroToggle = document.getElementById('skipIntroToggle');
+    const skipOutroToggle = document.getElementById('skipOutroToggle');
+    const introStartInput = document.getElementById('introStartInput');
+    const introEndInput = document.getElementById('introEndInput');
+    
+    if (skipIntroToggle) skipIntroToggle.checked = playerSettings.skipIntro;
+    if (skipOutroToggle) skipOutroToggle.checked = playerSettings.skipOutro;
+    if (introStartInput) introStartInput.value = playerSettings.introStart;
+    if (introEndInput) introEndInput.value = playerSettings.introEnd;
+}
+
+// 切换设置面板显示/隐藏
+function toggleSettingsPanel() {
+    const settingsPanel = document.getElementById('settingsPanel');
+    if (settingsPanel) {
+        settingsPanel.classList.toggle('hidden');
+    }
+}
+
+// 保存设置
+function saveSettings() {
+    const skipIntroToggle = document.getElementById('skipIntroToggle');
+    const skipOutroToggle = document.getElementById('skipOutroToggle');
+    const introStartInput = document.getElementById('introStartInput');
+    const introEndInput = document.getElementById('introEndInput');
+    
+    if (skipIntroToggle && skipOutroToggle && introStartInput && introEndInput) {
+        playerSettings.skipIntro = skipIntroToggle.checked;
+        playerSettings.skipOutro = skipOutroToggle.checked;
+        playerSettings.introStart = parseInt(introStartInput.value) || 0;
+        playerSettings.introEnd = parseInt(introEndInput.value) || 90;
+        
+        // 验证设置的有效性
+        if (playerSettings.introStart < 0) playerSettings.introStart = 0;
+        if (playerSettings.introEnd <= playerSettings.introStart) playerSettings.introEnd = playerSettings.introStart + 90;
+        if (playerSettings.introEnd > 600) playerSettings.introEnd = 600;
+        
+        // 更新现有的跳过功能变量以保持兼容性
+        if (typeof skipIntroEnabled !== 'undefined') skipIntroEnabled = playerSettings.skipIntro;
+        if (typeof skipOutroEnabled !== 'undefined') skipOutroEnabled = playerSettings.skipOutro;
+        if (typeof introStart !== 'undefined') introStart = playerSettings.introStart;
+        if (typeof introEnd !== 'undefined') introEnd = playerSettings.introEnd;
+        
+        // 保存到localStorage
+        try {
+            localStorage.setItem('playerSettings', JSON.stringify(playerSettings));
+            localStorage.setItem('skipIntroEnabled', playerSettings.skipIntro.toString());
+            localStorage.setItem('skipOutroEnabled', playerSettings.skipOutro.toString());
+            showToast('设置已保存', 'success');
+        } catch (e) {
+            console.error('保存设置失败:', e);
+            showToast('保存设置失败', 'error');
+        }
+        
+        // 关闭设置面板
+        toggleSettingsPanel();
+    }
+}
+
+// 处理视频播放进度更新
+function handleTimeUpdate() {
+    if (!window.player || !playerSettings.skipIntro) return;
+    
+    const currentTime = window.player.currentTime;
+    const duration = window.player.duration;
+    
+    // 跳过片头
+    if (playerSettings.skipIntro && 
+        currentTime >= playerSettings.introStart && 
+        currentTime < playerSettings.introEnd &&
+        Math.abs(currentTime - playerSettings.introStart) < 2) { // 确保是刚开始播放片头
+        window.player.currentTime = playerSettings.introEnd;
+        showToast('已自动跳过片头', 'info');
+    }
+    
+    // 跳过片尾（假设片尾是视频最后2分钟）
+    if (playerSettings.skipOutro && duration && currentTime >= (duration - 120)) {
+        // 查找下一集并播放
+        const currentIndex = parseInt(localStorage.getItem('currentEpisodeIndex') || '0');
+        const episodes = JSON.parse(localStorage.getItem('currentEpisodes') || '[]');
+        
+        if (currentIndex < episodes.length - 1) {
+            const nextIndex = currentIndex + 1;
+            const nextUrl = episodes[nextIndex];
+            const vodId = new URLSearchParams(window.location.search).get('id');
+            const sourceKey = localStorage.getItem('currentSourceCode');
+            const title = localStorage.getItem('currentVideoTitle');
+            
+            // 构建下一集播放URL
+            const nextEpisodeUrl = `player.html?id=${vodId}&source=${sourceKey}&url=${encodeURIComponent(nextUrl)}&index=${nextIndex}&title=${encodeURIComponent(title)}`;
+            window.location.href = nextEpisodeUrl;
+        }
     }
 }

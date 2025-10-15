@@ -163,6 +163,65 @@
                 </div>
             </div>
         </div>
+
+        <!-- 设置面板 -->
+        <div id="settingsPanel" class="fixed inset-0 bg-black/90 z-50 hidden flex items-center justify-center">
+            <div class="bg-[#111] border border-[#333] rounded-lg w-full max-w-md p-6 max-h-[80vh] overflow-y-auto">
+                <div class="flex justify-between items-center mb-6">
+                    <h3 class="text-xl font-bold">播放器设置</h3>
+                    <button onclick="toggleSettingsPanel()" class="text-gray-400 hover:text-white">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+                
+                <!-- 跳过设置 -->
+                <div class="mb-6">
+                    <h4 class="text-lg font-medium mb-3">跳过设置</h4>
+                    <div class="space-y-3">
+                        <div class="flex items-center justify-between">
+                            <label for="skipIntroToggle" class="flex items-center cursor-pointer">
+                                <span class="mr-2">跳过片头</span>
+                            </label>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="skipIntroToggle" class="sr-only peer">
+                                <div class="w-11 h-6 bg-gray-700 rounded-full peer peer-checked:bg-blue-600 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                            </label>
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <label for="skipOutroToggle" class="flex items-center cursor-pointer">
+                                <span class="mr-2">跳过片尾</span>
+                            </label>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="skipOutroToggle" class="sr-only peer">
+                                <div class="w-11 h-6 bg-gray-700 rounded-full peer peer-checked:bg-blue-600 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 片头片尾时间设置 -->
+                <div class="mb-6">
+                    <h4 class="text-lg font-medium mb-3">时间设置</h4>
+                    <div class="space-y-4">
+                        <div>
+                            <label for="introStartInput" class="block text-sm text-gray-400 mb-1">片头开始时间 (秒)</label>
+                            <input type="number" id="introStartInput" class="w-full bg-[#222] border border-[#333] text-white px-3 py-2 rounded" value="0" min="0" max="300">
+                        </div>
+                        <div>
+                            <label for="introEndInput" class="block text-sm text-gray-400 mb-1">片头结束时间 (秒)</label>
+                            <input type="number" id="introEndInput" class="w-full bg-[#222] border border-[#333] text-white px-3 py-2 rounded" value="90" min="1" max="600">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 保存按钮 -->
+                <button onclick="saveSettings()" class="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded-lg transition-colors">
+                    保存设置
+                </button>
+            </div>
+        </div>
     </main>
 
     <!-- 添加快捷键提示元素 -->
