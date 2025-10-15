@@ -1,15 +1,36 @@
-// 全局变量
+// ============= 应用全局状态 =============
+
+// API配置
 let selectedAPIs = JSON.parse(localStorage.getItem('selectedAPIs') || '["tyyszy","dyttzy", "bfzy", "ruyi"]'); // 默认选中资源
 let customAPIs = JSON.parse(localStorage.getItem('customAPIs') || '[]'); // 存储自定义API列表
 
-// 添加当前播放的集数索引
+// 视频播放状态
 let currentEpisodeIndex = 0;
-// 添加当前视频的所有集数
 let currentEpisodes = [];
-// 添加当前视频的标题
 let currentVideoTitle = '';
-// 全局变量用于倒序状态
 let episodesReversed = false;
+
+// 性能优化：DOM选择器缓存
+const elementCache = {};
+const getElement = (selector) => {
+    if (!elementCache[selector]) {
+        elementCache[selector] = document.querySelector(selector);
+    }
+    return elementCache[selector];
+};
+
+// 性能优化：防抖函数
+const debounce = (func, wait) => {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+};
 
 // 页面初始化
 document.addEventListener('DOMContentLoaded', function () {

@@ -1,3 +1,9 @@
+// ============= 搜索工具函数 =============
+
+// 性能优化：搜索结果缓存
+const searchCache = new Map();
+const CACHE_DURATION = 30 * 60 * 1000; // 30分钟缓存
+
 // 构建带筛选条件的查询字符串
 function buildQueryString(query, filters = {}) {
     let queryStr = `?ac=videolist&wd=${encodeURIComponent(query)}`;
@@ -34,6 +40,91 @@ function buildPageQueryString(query, page, filters = {}) {
     return queryStr;
 }
 
+// 生成缓存键
+function generateCacheKey(apiId, query, filters) {
+    return `${apiId}_${query}_${JSON.stringify(filters)}`;
+}
+
+// 获取缓存的搜索结果
+function getCachedSearchResult(apiId, query, filters) {
+    const cacheKey = generateCacheKey(apiId, query, filters);
+    const cached = searchCache.get(cacheKey);
+    
+    if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
+        return cached.data;
+    }
+    
+    // 清除过期缓存
+    if (cached) {
+        searchCache.delete(cacheKey);
+    }
+    
+    return null;
+}
+
+// 缓存搜索结果
+function cacheSearchResult(apiId, query, filters, data) {
+    const cacheKey = generateCacheKey(apiId, query, filters);
+    searchCache.set(cacheKey, {
+        data,
+        timestamp: Date.now()
+    });
+    
+    // 限制缓存大小，防止内存占用过高
+    if (searchCache.size > 50) {
+        // 删除最早添加的缓存项
+        const firstKey = searchCache.keys().next().value;
+        searchCache.delete(firstKey);
+    }
+}
+
+// 带重试机制的fetch函数
+async function fetchWithRetry(url, options = {}, retries = 2, backoffTime = 1000) {
+    let lastError;
+    
+    for (let i = 0; i <= retries; i++) {
+        try {
+            // 为每个请求设置独立的timeout
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), options.timeout || 15000);
+            
+            const response = await fetch(url, {
+                ...options,
+                signal: controller.signal
+            });
+            
+            clearTimeout(timeoutId);
+            
+            if (response.ok) {
+                return response;
+            }
+            
+            if (i === retries) {
+                throw new Error(`Request failed with status ${response.status}`);
+            }
+        } catch (error) {
+            lastError = error;
+            
+            // 如果是用户中止（AbortError），直接抛出，不重试
+            if (error.name === 'AbortError') {
+                throw error;
+            }
+            
+            // 如果是最后一次重试，抛出错误
+            if (i === retries) {
+                throw lastError;
+            }
+            
+            // 指数退避
+            const waitTime = backoffTime * Math.pow(2, i);
+            console.log(`Request failed, retrying in ${waitTime}ms...`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+        }
+    }
+    
+    throw lastError;
+}
+
 // 检查黄色内容过滤是否启用
 function isYellowContentFilterEnabled() {
     // 为了向后兼容，先检查新的键名，如果不存在再检查旧的键名
@@ -52,12 +143,19 @@ function isYellowContentFilterEnabled() {
 
 async function searchByAPIAndKeyWord(apiId, query, filters = {}) {
     try {
-        // 如果启用了黄色内容过滤，检查当前API是否为成人内容源
+        // 检查黄色内容过滤
         if (isYellowContentFilterEnabled() && !apiId.startsWith('custom_')) {
             const apiSource = API_SITES[apiId];
             if (apiSource && (apiSource.is_adult === true || apiSource.adult === true)) {
                 return []; // 跳过成人内容源
             }
+        }
+        
+        // 尝试从缓存获取结果
+        const cachedResults = getCachedSearchResult(apiId, query, filters);
+        if (cachedResults) {
+            console.log(`从缓存返回API ${apiId} 的搜索结果`);
+            return cachedResults;
         }
         
         let apiUrl, apiName, apiBaseUrl;
@@ -79,23 +177,19 @@ async function searchByAPIAndKeyWord(apiId, query, filters = {}) {
             apiName = API_SITES[apiId].name;
         }
         
-        // 添加超时处理
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 15000);
-        
         // 添加鉴权参数到代理URL
         const proxiedUrl = await window.ProxyAuth?.addAuthToProxyUrl ? 
             await window.ProxyAuth.addAuthToProxyUrl(PROXY_URL + encodeURIComponent(apiUrl)) :
             PROXY_URL + encodeURIComponent(apiUrl);
         
-        const response = await fetch(proxiedUrl, {
+        // 使用带重试机制的fetch
+        const response = await fetchWithRetry(proxiedUrl, {
             headers: API_CONFIG.search.headers,
-            signal: controller.signal
+            timeout: 15000
         });
         
-        clearTimeout(timeoutId);
-        
         if (!response.ok) {
+            console.warn(`API ${apiId} 返回非成功状态码: ${response.status}`);
             return [];
         }
         
@@ -178,9 +272,35 @@ async function searchByAPIAndKeyWord(apiId, query, filters = {}) {
             });
         }
         
+        // 缓存搜索结果
+        cacheSearchResult(apiId, query, filters, results);
+        
         return results;
     } catch (error) {
-        console.warn(`API ${apiId} 搜索失败:`, error);
+        // 详细的错误日志记录
+        if (error.name === 'AbortError') {
+            console.warn(`API ${apiId} 搜索超时`);
+        } else {
+            console.warn(`API ${apiId} 搜索失败:`, error);
+        }
         return [];
+    }
+}
+
+// 清理过期缓存的辅助函数
+// 定义为全局函数，避免ES模块导出语法错误
+window.cleanExpiredCache = function() {
+    const now = Date.now();
+    let deletedCount = 0;
+    
+    for (const [key, value] of searchCache.entries()) {
+        if (now - value.timestamp >= CACHE_DURATION) {
+            searchCache.delete(key);
+            deletedCount++;
+        }
+    }
+    
+    if (deletedCount > 0) {
+        console.log(`清理了 ${deletedCount} 个过期搜索缓存`);
     }
 }

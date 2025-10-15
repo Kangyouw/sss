@@ -1,57 +1,76 @@
+// 全局配置和选项
 const selectedAPIs = JSON.parse(localStorage.getItem('selectedAPIs') || '[]');
 const customAPIs = JSON.parse(localStorage.getItem('customAPIs') || '[]'); // 存储自定义API列表
+// 定义可用的播放速度选项
+const playbackRates = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
 
-// 改进返回功能
+// 性能优化：预定义常用的DOM选择器缓存
+const domCache = {};
+const getCachedElement = (selector) => {
+  if (!domCache[selector]) {
+    domCache[selector] = document.querySelector(selector);
+  }
+  return domCache[selector];
+};
+
+// 优化的返回功能
 function goBack(event) {
     // 防止默认链接行为
     if (event) event.preventDefault();
     
-    // 1. 优先检查URL参数中的returnUrl
-    const urlParams = new URLSearchParams(window.location.search);
-    const returnUrl = urlParams.get('returnUrl');
-    
-    if (returnUrl) {
-        // 如果URL中有returnUrl参数，优先使用
-        window.location.href = decodeURIComponent(returnUrl);
-        return;
-    }
-    
-    // 2. 检查localStorage中保存的lastPageUrl
-    const lastPageUrl = localStorage.getItem('lastPageUrl');
-    if (lastPageUrl && lastPageUrl !== window.location.href) {
-        window.location.href = lastPageUrl;
-        return;
-    }
-    
-    // 3. 检查是否是从搜索页面进入的播放器
-    const referrer = document.referrer;
-    
-    // 检查 referrer 是否包含搜索参数
-    if (referrer && (referrer.includes('/s=') || referrer.includes('?s='))) {
-        // 如果是从搜索页面来的，返回到搜索页面
-        window.location.href = referrer;
-        return;
-    }
-    
-    // 4. 如果是在iframe中打开的，尝试关闭iframe
-    if (window.self !== window.top) {
-        try {
-            // 尝试调用父窗口的关闭播放器函数
-            window.parent.closeVideoPlayer && window.parent.closeVideoPlayer();
+    try {
+        // 1. 优先检查URL参数中的returnUrl
+        const urlParams = new URLSearchParams(window.location.search);
+        const returnUrl = urlParams.get('returnUrl');
+        
+        if (returnUrl) {
+            // 如果URL中有returnUrl参数，优先使用
+            window.location.href = decodeURIComponent(returnUrl);
             return;
-        } catch (e) {
-            console.error('调用父窗口closeVideoPlayer失败:', e);
         }
-    }
-    
-    // 5. 无法确定上一页，则返回首页
-    if (!referrer || referrer === '') {
+        
+        // 2. 检查localStorage中保存的lastPageUrl
+        const lastPageUrl = localStorage.getItem('lastPageUrl');
+        if (lastPageUrl && lastPageUrl !== window.location.href) {
+            window.location.href = lastPageUrl;
+            return;
+        }
+        
+        // 3. 检查是否是从搜索页面进入的播放器
+        const referrer = document.referrer;
+        
+        // 检查 referrer 是否包含搜索参数
+        if (referrer && (referrer.includes('/s=') || referrer.includes('?s='))) {
+            // 如果是从搜索页面来的，返回到搜索页面
+            window.location.href = referrer;
+            return;
+        }
+        
+        // 4. 如果是在iframe中打开的，尝试关闭iframe
+        if (window.self !== window.top) {
+            try {
+                // 尝试调用父窗口的关闭播放器函数
+                if (window.parent && typeof window.parent.closeVideoPlayer === 'function') {
+                    window.parent.closeVideoPlayer();
+                }
+                return;
+            } catch (e) {
+                // 静默失败，继续执行后续逻辑
+            }
+        }
+        
+        // 5. 无法确定上一页，则返回首页
+        if (!referrer || referrer === '') {
+            window.location.href = '/';
+            return;
+        }
+        
+        // 6. 以上都不满足，使用默认行为：返回上一页
+        window.history.back();
+    } catch (error) {
+        // 任何错误都返回首页作为后备方案
         window.location.href = '/';
-        return;
     }
-    
-    // 6. 以上都不满足，使用默认行为：返回上一页
-    window.history.back();
 }
 
 // 页面加载时保存当前URL到localStorage，作为返回目标
@@ -105,7 +124,7 @@ let introEnd = 90; // 片头结束时间（默认90秒）
 let outroStart = null; // 片尾开始时间
 let outroEnd = null; // 片尾结束时间
 // 播放速度相关增强
-const playbackRates = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]; // 扩展速度选项
+// 扩展速度选项已经在文件顶部声明，这里不再重复声明
 let originalPlaybackRate = 1.0; // 保存原始播放速度（用于长按等临时改变）
 let isLongPress = false; // 长按状态标记
 let longPressTimer = null; // 长按计时器
@@ -553,7 +572,7 @@ function initPlayer(videoUrl) {
         setting: true,
         loop: false,
         flip: false,
-        playbackRate: playbackRateConfig, // 启用自定义播放速度功能
+        playbackRate: true, // 启用播放速度功能（必须是布尔值）
         aspectRatio: false,
         fullscreen: true,
         fullscreenWeb: true,
@@ -813,21 +832,46 @@ function initPlayer(videoUrl) {
     art.on('ready', () => {
         hideControls();
         
-        // 应用保存的播放速度
-            if (currentPlaybackRate !== 1.0 && art.plugins && art.plugins.playbackRate && art.plugins.playbackRate.switchPlaybackRate) {
-                art.plugins.playbackRate.switchPlaybackRate(currentPlaybackRate);
-            }
-            
-            // 监听播放速度变化事件，保存用户选择的速度
-            art.on('playbackRateChange', (rate) => {
-                currentPlaybackRate = rate;
-                const savedRateKey = `playbackRate_${getVideoId()}`;
-                localStorage.setItem(savedRateKey, rate.toString());
-                // 确保showSpeedChangeHint函数存在再调用
-                if (typeof showSpeedChangeHint === 'function') {
-                    showSpeedChangeHint(rate);
+        // 配置自定义播放速度选项
+        if (art.plugins && art.plugins.playbackRate) {
+            try {
+                // 尝试直接修改playbackRate插件的选项
+                if (art.plugins.playbackRate.options) {
+                    art.plugins.playbackRate.options = playbackRates.map(rate => ({ name: `${rate}x`, value: rate }));
+                    console.log('自定义播放速度选项已配置:', playbackRates);
+                } else {
+                    console.warn('无法直接修改playbackRate选项，将使用默认选项但会记住用户选择');
                 }
-            });
+            } catch (e) {
+                console.warn('配置自定义播放速度选项时出错:', e);
+            }
+        }
+        
+        // 应用保存的播放速度
+        if (currentPlaybackRate !== 1.0 && art.plugins && art.plugins.playbackRate && art.plugins.playbackRate.switchPlaybackRate) {
+            try {
+                art.plugins.playbackRate.switchPlaybackRate(currentPlaybackRate);
+                console.log('已应用保存的播放速度:', currentPlaybackRate);
+            } catch (e) {
+                console.warn('应用保存的播放速度时出错:', e);
+                // 备用方案：直接设置视频元素的播放速度
+                if (art.video) {
+                    art.video.playbackRate = currentPlaybackRate;
+                }
+            }
+        }
+        
+        // 监听播放速度变化事件，保存用户选择的速度
+        art.on('playbackRateChange', (rate) => {
+            currentPlaybackRate = rate;
+            const savedRateKey = `playbackRate_${getVideoId()}`;
+            localStorage.setItem(savedRateKey, rate.toString());
+            console.log('播放速度已更改为:', rate);
+            // 确保showSpeedChangeHint函数存在再调用
+            if (typeof showSpeedChangeHint === 'function') {
+                showSpeedChangeHint(rate);
+            }
+        });
             
             // 立即初始化智能跳过功能，确保用户控制界面正确显示
             initSkipIntroOutro();

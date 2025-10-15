@@ -1,33 +1,41 @@
-import path from 'path';
 import express from 'express';
 import axios from 'axios';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import fs from 'fs';
+import fs from 'fs/promises';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 
+// 加载环境变量
 dotenv.config();
 
+// 获取当前文件路径信息
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __dirname = dirname(__filename);
 
+// 应用配置
 const config = {
   port: process.env.PORT || 8080,
   password: process.env.PASSWORD || '',
   corsOrigin: process.env.CORS_ORIGIN || '*',
-  timeout: parseInt(process.env.REQUEST_TIMEOUT || '5000'),
-  maxRetries: parseInt(process.env.MAX_RETRIES || '2'),
+  timeout: parseInt(process.env.REQUEST_TIMEOUT || '5000', 10),
+  maxRetries: parseInt(process.env.MAX_RETRIES || '2', 10),
   cacheMaxAge: process.env.CACHE_MAX_AGE || '1d',
   userAgent: process.env.USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
   debug: process.env.DEBUG === 'true'
 };
 
+// 调试日志函数
 const log = (...args) => {
   if (config.debug) {
     console.log('[DEBUG]', ...args);
   }
+};
+
+// 错误日志函数
+const errorLog = (...args) => {
+  console.error('[ERROR]', ...args);
 };
 
 const app = express();
@@ -45,41 +53,46 @@ app.use((req, res, next) => {
   next();
 });
 
-function sha256Hash(input) {
+// 生成SHA256哈希
+const sha256Hash = (input) => {
   return new Promise((resolve) => {
-    const hash = crypto.createHash('sha256');
-    hash.update(input);
-    resolve(hash.digest('hex'));
+    try {
+      const hash = crypto.createHash('sha256');
+      hash.update(input);
+      resolve(hash.digest('hex'));
+    } catch (error) {
+      errorLog('生成哈希失败:', error);
+      resolve('');
+    }
   });
-}
+};
 
-async function renderPage(filePath, password) {
-  let content = fs.readFileSync(filePath, 'utf8');
-  if (password !== '') {
-    const sha256 = await sha256Hash(password);
-    content = content.replace('{{PASSWORD}}', sha256);
-  } else {
-    content = content.replace('{{PASSWORD}}', '');
+// 渲染页面并注入密码哈希
+const renderPage = async (filePath, password) => {
+  try {
+    const content = await fs.readFile(filePath, 'utf8');
+    if (password !== '') {
+      const sha256 = await sha256Hash(password);
+      return content.replace('{{PASSWORD}}', sha256);
+    }
+    return content.replace('{{PASSWORD}}', '');
+  } catch (error) {
+    errorLog(`读取文件失败 ${filePath}:`, error);
+    throw error;
   }
-  return content;
-}
+};
 
+// 处理主要页面请求
 app.get(['/', '/index.html', '/player.html'], async (req, res) => {
   try {
-    let filePath;
-    switch (req.path) {
-      case '/player.html':
-        filePath = join(__dirname, 'player.html');
-        break;
-      default: // '/' 和 '/index.html'
-        filePath = join(__dirname, 'index.html');
-        break;
-    }
+    const filePath = req.path === '/player.html' 
+      ? join(__dirname, 'player.html') 
+      : join(__dirname, 'index.html');
     
     const content = await renderPage(filePath, config.password);
     res.send(content);
   } catch (error) {
-    console.error('页面渲染错误:', error);
+    errorLog('页面渲染错误:', error);
     res.status(500).send('读取静态页面失败');
   }
 });
@@ -95,7 +108,8 @@ app.get('/s=:keyword', async (req, res) => {
   }
 });
 
-function isValidUrl(urlString) {
+// 验证URL安全性
+const isValidUrl = (urlString) => {
   try {
     const parsed = new URL(urlString);
     const allowedProtocols = ['http:', 'https:'];
@@ -117,42 +131,49 @@ function isValidUrl(urlString) {
   } catch {
     return false;
   }
-}
+};
 
 // 验证代理请求的鉴权
-function validateProxyAuth(req) {
+const validateProxyAuth = (req) => {
   const authHash = req.query.auth;
   const timestamp = req.query.t;
   
-  // 获取服务器端密码哈希
+  // 获取服务器端密码
   const serverPassword = config.password;
   if (!serverPassword) {
-    console.error('服务器未设置 PASSWORD 环境变量，代理访问被拒绝');
+    errorLog('服务器未设置 PASSWORD 环境变量，代理访问被拒绝');
     return false;
   }
   
-  // 使用 crypto 模块计算 SHA-256 哈希
-  const serverPasswordHash = crypto.createHash('sha256').update(serverPassword).digest('hex');
-  
-  if (!authHash || authHash !== serverPasswordHash) {
-    console.warn('代理请求鉴权失败：密码哈希不匹配');
-    console.warn(`期望: ${serverPasswordHash}, 收到: ${authHash}`);
-    return false;
-  }
-  
-  // 验证时间戳（10分钟有效期）
-  if (timestamp) {
-    const now = Date.now();
-    const maxAge = 10 * 60 * 1000; // 10分钟
-    if (now - parseInt(timestamp) > maxAge) {
-      console.warn('代理请求鉴权失败：时间戳过期');
+  try {
+    // 计算密码哈希
+    const serverPasswordHash = crypto.createHash('sha256')
+      .update(serverPassword)
+      .digest('hex');
+    
+    if (!authHash || authHash !== serverPasswordHash) {
+      log('代理请求鉴权失败：密码哈希不匹配');
       return false;
     }
+    
+    // 验证时间戳（10分钟有效期）
+    if (timestamp) {
+      const now = Date.now();
+      const maxAge = 10 * 60 * 1000; // 10分钟
+      if (now - parseInt(timestamp, 10) > maxAge) {
+        log('代理请求鉴权失败：时间戳过期');
+        return false;
+      }
+    }
+    
+    return true;
+  } catch (error) {
+    errorLog('验证代理请求时出错:', error);
+    return false;
   }
-  
-  return true;
-}
+};
 
+// 代理请求处理
 app.get('/proxy/:encodedUrl', async (req, res) => {
   try {
     // 验证鉴权
@@ -173,32 +194,35 @@ app.get('/proxy/:encodedUrl', async (req, res) => {
 
     log(`代理请求: ${targetUrl}`);
 
-    // 添加请求超时和重试逻辑
-    const maxRetries = config.maxRetries;
-    let retries = 0;
-    
-    const makeRequest = async () => {
+    // 创建带超时和重试的HTTP客户端
+    const axiosClient = axios.create({
+      timeout: config.timeout,
+      headers: {
+        'User-Agent': config.userAgent
+      }
+    });
+
+    // 带重试的请求函数
+    const makeRequestWithRetry = async (retriesLeft = config.maxRetries) => {
       try {
-        return await axios({
+        return await axiosClient({
           method: 'get',
           url: targetUrl,
-          responseType: 'stream',
-          timeout: config.timeout,
-          headers: {
-            'User-Agent': config.userAgent
-          }
+          responseType: 'stream'
         });
       } catch (error) {
-        if (retries < maxRetries) {
-          retries++;
-          log(`重试请求 (${retries}/${maxRetries}): ${targetUrl}`);
-          return makeRequest();
+        if (retriesLeft > 0) {
+          const retryCount = config.maxRetries - retriesLeft + 1;
+          log(`重试请求 (${retryCount}/${config.maxRetries}): ${targetUrl}`);
+          // 添加指数退避
+          await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+          return makeRequestWithRetry(retriesLeft - 1);
         }
         throw error;
       }
     };
 
-    const response = await makeRequest();
+    const response = await makeRequestWithRetry();
 
     // 转发响应头（过滤敏感头）
     const headers = { ...response.headers };
@@ -207,24 +231,45 @@ app.get('/proxy/:encodedUrl', async (req, res) => {
       'content-security-policy,cookie,set-cookie,x-frame-options,access-control-allow-origin'
     ).split(',');
     
-    sensitiveHeaders.forEach(header => delete headers[header]);
+    sensitiveHeaders.forEach(header => delete headers[header.toLowerCase()]);
     res.set(headers);
 
-    // 管道传输响应流
+    // 管道传输响应流并处理错误
     response.data.pipe(res);
+    
+    // 处理流错误
+    response.data.on('error', (err) => {
+      errorLog('代理流错误:', err);
+      res.end();
+    });
+    
+    // 处理客户端断开连接
+    res.on('close', () => {
+      response.data.destroy();
+    });
   } catch (error) {
-    console.error('代理请求错误:', error.message);
-    if (error.response) {
-      res.status(error.response.status || 500);
-      error.response.data.pipe(res);
-    } else {
-      res.status(500).send(`请求失败: ${error.message}`);
+    errorLog('代理请求错误:', error.message);
+    
+    if (!res.headersSent) {
+      if (error.response) {
+        res.status(error.response.status || 500);
+        if (error.response.data) {
+          error.response.data.pipe(res);
+        } else {
+          res.send(`请求失败: ${error.message}`);
+        }
+      } else {
+        res.status(500).send(`请求失败: ${error.message}`);
+      }
     }
   }
 });
 
-app.use(express.static(path.join(__dirname), {
-  maxAge: config.cacheMaxAge
+// 静态文件服务
+app.use(express.static(__dirname, {
+  maxAge: config.cacheMaxAge,
+  etag: true,
+  lastModified: true
 }));
 
 app.use((err, req, res, next) => {
@@ -237,7 +282,7 @@ app.use((req, res) => {
 });
 
 // 启动服务器
-app.listen(config.port, () => {
+const server = app.listen(config.port, () => {
   console.log(`服务器运行在 http://localhost:${config.port}`);
   if (config.password !== '') {
     console.log('用户登录密码已设置');
@@ -248,4 +293,26 @@ app.listen(config.port, () => {
     console.log('调试模式已启用');
     console.log('配置:', { ...config, password: config.password ? '******' : '' });
   }
+});
+
+// 优雅关闭处理
+const handleShutdown = () => {
+  console.log('正在关闭服务器...');
+  server.close(() => {
+    console.log('服务器已关闭');
+    process.exit(0);
+  });
+};
+
+// 监听终止信号
+process.on('SIGINT', handleShutdown);
+process.on('SIGTERM', handleShutdown);
+
+// 防止未捕获异常导致进程崩溃
+process.on('uncaughtException', (error) => {
+  errorLog('未捕获的异常:', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  errorLog('未处理的Promise拒绝:', reason);
 });

@@ -1,8 +1,13 @@
-// 全局常量配置
-const PROXY_URL = '/proxy/';    // 适用于 Cloudflare, Netlify (带重写), Vercel (带重写)
-// const HOPLAYER_URL = 'https://hoplayer.com/index.html';
+// ============= 全局配置常量 =============
+
+// API代理配置
+const PROXY_URL = '/proxy/';  // 适用于所有支持重写的部署平台
+
+// 搜索相关配置
 const SEARCH_HISTORY_KEY = 'videoSearchHistory';
 const MAX_HISTORY_ITEMS = 5;
+
+// ============= 安全配置 =============
 
 // 密码保护配置
 // 注意：PASSWORD 环境变量是必需的，所有部署都必须设置密码以确保安全
@@ -11,6 +16,8 @@ const PASSWORD_CONFIG = {
     verificationTTL: 90 * 24 * 60 * 60 * 1000  // 验证有效期（90天，约3个月）
 };
 
+// ============= 站点信息 =============
+
 // 网站信息配置
 const SITE_CONFIG = {
     name: 'LibreTV',
@@ -18,6 +25,24 @@ const SITE_CONFIG = {
     description: '免费在线视频搜索与观看平台',
     logo: 'image/logo.png',
     version: '1.0.3'
+};
+
+// ============= 播放器配置 =============
+
+// 播放器相关配置
+const PLAYER_CONFIG = {
+    // 播放器相关本地存储键名
+    adFilteringStorage: 'adFilteringEnabled',
+    playbackRateStorage: 'preferredPlaybackRate',
+    skipIntroStorage: 'skipIntroEnabled',
+    skipOutroStorage: 'skipOutroEnabled',
+    autoplayStorage: 'autoplayEnabled',
+    // 默认配置
+    defaultPlaybackRate: 1.0,
+    defaultSkipIntro: true,
+    defaultSkipOutro: true,
+    defaultAutoplay: true,
+    defaultAdFiltering: true
 };
 
 // API站点配置
@@ -490,19 +515,6 @@ const M3U8_PATTERN = /\$https?:\/\/[^"'\s]+?\.m3u8/g;
 
 // 添加自定义播放器URL
 const CUSTOM_PLAYER_URL = 'player.html'; // 使用相对路径引用本地player.html
-
-// 增加视频播放相关配置
-const PLAYER_CONFIG = {
-    autoplay: true,
-    allowFullscreen: true,
-    width: '100%',
-    height: '600',
-    timeout: 15000,  // 播放器加载超时时间
-    filterAds: true,  // 是否启用广告过滤
-    autoPlayNext: true,  // 默认启用自动连播功能
-    adFilteringEnabled: true, // 默认开启分片广告过滤
-    adFilteringStorage: 'adFilteringEnabled' // 存储广告过滤设置的键名
-};
 
 // 增加错误信息本地化
 const ERROR_MESSAGES = {
