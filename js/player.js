@@ -890,13 +890,26 @@ function initPlayer(videoUrl) {
             // 立即初始化智能跳过功能，确保用户控制界面正确显示
             initSkipIntroOutro();
             
-            // 初始化播放器设置
-            initPlayerSettings();
+            // 初始化播放器设置（包装在try-catch中避免错误）
+            try {
+                // 先检查播放器是否已准备好
+                if (window.art && window.art.ready) {
+                    initPlayerSettings();
+                } else {
+                    console.log('播放器尚未完全准备好，延迟初始化设置');
+                }
+            } catch (e) {
+                console.error('初始化播放器设置时出错:', e);
+            }
             
             // 额外添加一个延时调用，确保设置面板已经完全渲染
             setTimeout(() => {
-                initSkipIntroOutro();
-                initPlayerSettings();
+                try {
+                    initSkipIntroOutro();
+                    initPlayerSettings();
+                } catch (e) {
+                    console.error('延时初始化播放器设置时出错:', e);
+                }
             }, 1000);
         
         // 设置视频元数据加载事件，计算片尾时间
@@ -1945,27 +1958,56 @@ function addSkipSettingsToMenu() {
     let playerControlsNormal = false;
     let settingsPanel = null;
     
-    // 尝试多种可能的设置面板选择器
-    const settingSelectors = ['.artplayer-setting', '.artplayer-setting-panel'];
-    for (const selector of settingSelectors) {
-        settingsPanel = document.querySelector(selector);
-        if (settingsPanel && settingsPanel.style.display !== 'none') {
+    // 方法1：检查ArtPlayer实例是否正常初始化
+    if (typeof art !== 'undefined' && art && art.constructor && art.constructor.name === 'Artplayer') {
+        playerControlsNormal = true;
+        console.log('ArtPlayer实例已正常初始化');
+    }
+    
+    // 方法2：检查播放器控件是否存在
+    if (!playerControlsNormal) {
+        const controlsSelector = '.artplayer-controls';
+        const controls = document.querySelector(controlsSelector);
+        if (controls && controls.children.length > 0) {
             playerControlsNormal = true;
-            console.log('找到正常的播放器设置面板');
-            break;
+            console.log('找到正常的播放器控件');
         }
     }
     
-    // 如果找不到标准设置面板，尝试通过API访问
+    // 方法3：尝试多种可能的设置面板选择器
+    if (!playerControlsNormal) {
+        const settingSelectors = ['.artplayer-setting', '.artplayer-setting-panel'];
+        for (const selector of settingSelectors) {
+            settingsPanel = document.querySelector(selector);
+            if (settingsPanel) {
+                playerControlsNormal = true;
+                console.log('找到正常的播放器设置面板:', selector);
+                break;
+            }
+        }
+    }
+    
+    // 方法4：尝试通过API访问设置面板
     if (!playerControlsNormal && art && art.template && art.template.setting) {
         settingsPanel = art.template.setting;
         playerControlsNormal = true;
         console.log('通过播放器API获取到设置面板');
     }
     
-    // 只有在播放器控制不正常时才创建临时区域
-    if (!playerControlsNormal) {
-        console.warn('播放器控制不正常，创建临时跳过设置区域');
+    // 检查是否已存在临时区域
+    const existingTempSettings = document.querySelector('.temp-settings');
+    
+    // 如果播放器控制正常，移除已存在的临时区域
+    if (playerControlsNormal) {
+        console.log('播放器控制正常，移除临时设置区域（如果存在）');
+        if (existingTempSettings) {
+            existingTempSettings.remove();
+        }
+    }
+    
+    // 只有在播放器控制不正常且临时区域不存在时才创建临时区域
+    if (!playerControlsNormal && !existingTempSettings) {
+        console.warn('播放器控制不正常且临时区域不存在，创建临时跳过设置区域');
         
         // 查找播放器容器
         const playerContainer = document.querySelector('#player');
@@ -1990,6 +2032,10 @@ function addSkipSettingsToMenu() {
         `;
         playerContainer.appendChild(tempSettings);
         settingsPanel = tempSettings;
+    } else if (!playerControlsNormal && existingTempSettings) {
+        // 如果播放器控制不正常但临时区域已存在，直接使用已存在的
+        console.log('播放器控制不正常但临时区域已存在，使用已有的临时区域');
+        settingsPanel = existingTempSettings;
     }
     
     // 如果仍然没有设置面板，退出函数
@@ -2705,7 +2751,26 @@ function initPlayerSettings() {
     
     // 监听视频播放进度，实现自动跳过功能
     if (window.player) {
-        window.player.on('timeupdate', handleTimeUpdate);
+        // 尝试多种可能的事件监听方式，兼容不同版本的播放器
+        try {
+            // 方法1：使用标准DOM事件监听
+            if (window.player.video) {
+                window.player.video.addEventListener('timeupdate', handleTimeUpdate);
+            } 
+            // 方法2：尝试ArtPlayer的事件监听
+            else if (typeof art !== 'undefined' && art.on) {
+                art.on('timeupdate', handleTimeUpdate);
+            }
+            // 方法3：尝试直接添加到video元素
+            else {
+                const videoElement = document.querySelector('#player video');
+                if (videoElement) {
+                    videoElement.addEventListener('timeupdate', handleTimeUpdate);
+                }
+            }
+        } catch (e) {
+            console.error('添加进度监听失败:', e);
+        }
     }
 }
 
@@ -2726,13 +2791,30 @@ function updateSettingsUI() {
 function toggleSettingsPanel() {
     // 首先检查播放器控制是否正常工作
     let playerControlsNormal = false;
-    const settingSelectors = ['.artplayer-setting', '.artplayer-setting-panel'];
     
-    for (const selector of settingSelectors) {
-        const panel = document.querySelector(selector);
-        if (panel && panel.style.display !== 'none') {
+    // 方法1：检查ArtPlayer实例是否正常初始化
+    if (typeof art !== 'undefined' && art && art.constructor && art.constructor.name === 'Artplayer') {
+        playerControlsNormal = true;
+    }
+    
+    // 方法2：检查播放器控件是否存在
+    if (!playerControlsNormal) {
+        const controlsSelector = '.artplayer-controls';
+        const controls = document.querySelector(controlsSelector);
+        if (controls && controls.children.length > 0) {
             playerControlsNormal = true;
-            break;
+        }
+    }
+    
+    // 方法3：尝试多种可能的设置面板选择器
+    if (!playerControlsNormal) {
+        const settingSelectors = ['.artplayer-setting', '.artplayer-setting-panel'];
+        for (const selector of settingSelectors) {
+            const panel = document.querySelector(selector);
+            if (panel) {
+                playerControlsNormal = true;
+                break;
+            }
         }
     }
     
@@ -2798,18 +2880,44 @@ function saveSettings() {
 
 // 处理视频播放进度更新
 function handleTimeUpdate() {
-    if (!window.player || !playerSettings.skipIntro) return;
+    if (!playerSettings.skipIntro) return;
     
-    const currentTime = window.player.currentTime;
-    const duration = window.player.duration;
+    // 获取视频元素的兼容方式
+    let videoElement = null;
+    
+    // 方法1：尝试从window.player获取
+    if (window.player) {
+        if (window.player.video) {
+            videoElement = window.player.video;
+        } else if (typeof window.player.currentTime === 'number') {
+            videoElement = window.player;
+        }
+    }
+    
+    // 方法2：尝试直接获取video元素
+    if (!videoElement) {
+        videoElement = document.querySelector('#player video') || document.querySelector('video');
+    }
+    
+    // 如果仍然找不到视频元素，退出函数
+    if (!videoElement || typeof videoElement.currentTime !== 'number') {
+        return;
+    }
+    
+    const currentTime = videoElement.currentTime;
+    const duration = videoElement.duration;
     
     // 跳过片头
     if (playerSettings.skipIntro && 
         currentTime >= playerSettings.introStart && 
         currentTime < playerSettings.introEnd &&
         Math.abs(currentTime - playerSettings.introStart) < 2) { // 确保是刚开始播放片头
-        window.player.currentTime = playerSettings.introEnd;
-        showToast('已自动跳过片头', 'info');
+        try {
+            videoElement.currentTime = playerSettings.introEnd;
+            showToast('已自动跳过片头', 'info');
+        } catch (e) {
+            console.error('跳过片头失败:', e);
+        }
     }
     
     // 跳过片尾（假设片尾是视频最后2分钟）
