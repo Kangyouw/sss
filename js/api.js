@@ -1,5 +1,47 @@
 // 改进的API请求处理函数
 // 增强的fetch函数，支持重试机制，带详细日志
+
+/**
+ * 将HTTP URL转换为HTTPS URL，解决混合内容问题
+ * @param {string} url - 输入的URL
+ * @returns {string} - 转换后的HTTPS URL
+ */
+function ensureHttpsUrl(url) {
+    if (typeof url === 'string' && url.startsWith('http://')) {
+        return url.replace('http://', 'https://');
+    }
+    return url;
+}
+
+/**
+ * 递归处理对象中的所有URL，将HTTP转换为HTTPS
+ * @param {any} data - 要处理的数据对象
+ * @returns {any} - 处理后的数据对象
+ */
+function convertHttpToHttps(data) {
+    if (Array.isArray(data)) {
+        return data.map(item => convertHttpToHttps(item));
+    } else if (data !== null && typeof data === 'object') {
+        const result = {};
+        for (const key in data) {
+            if (Object.hasOwnProperty.call(data, key)) {
+                // 对于可能包含URL的属性进行特殊处理
+                if ((key.toLowerCase().includes('url') || 
+                     key.toLowerCase().includes('img') || 
+                     key.toLowerCase().includes('pic') || 
+                     key.toLowerCase() === 'vod_pic' ||
+                     key.toLowerCase() === 'vod_pic_thumb') && 
+                    typeof data[key] === 'string') {
+                    result[key] = ensureHttpsUrl(data[key]);
+                } else {
+                    result[key] = convertHttpToHttps(data[key]);
+                }
+            }
+        }
+        return result;
+    }
+    return data;
+}
 async function fetchWithRetry(url, options = {}, retries = 3, retryDelay = 1500) {
     let lastError;
     const targetUrl = options.targetUrl || url;
@@ -216,10 +258,13 @@ async function handleApiRequest(url) {
                 
                 console.log(`[请求处理] ${requestId} 成功获取 ${data.list.length} 条结果`);
                 
-                return JSON.stringify({
+                // 转换所有HTTP URL为HTTPS，解决混合内容问题
+                const secureData = convertHttpToHttps({
                     code: 200,
                     list: data.list || [],
                 });
+                
+                return JSON.stringify(secureData);
             } catch (fetchError) {
                 // 特殊处理连接拒绝错误
                 if (fetchError.message.includes('ERR_CONNECTION_REFUSED') || 
@@ -335,7 +380,8 @@ async function handleApiRequest(url) {
                     episodes = matches.map(link => link.replace(/^\$/, ''));
                 }
                 
-                return JSON.stringify({
+                // 构建响应数据并转换所有HTTP URL为HTTPS，解决混合内容问题
+                const responseData = {
                     code: 200,
                     episodes: episodes,
                     detailUrl: detailUrl,
@@ -353,7 +399,12 @@ async function handleApiRequest(url) {
                         source_name: sourceCode === 'custom' ? '自定义源' : API_SITES[sourceCode].name,
                         source_code: sourceCode
                     }
-                });
+                };
+                
+                // 转换所有HTTP URL为HTTPS
+                const secureResponseData = convertHttpToHttps(responseData);
+                
+                return JSON.stringify(secureResponseData);
             } catch (fetchError) {
                 clearTimeout(timeoutId);
                 throw fetchError;
@@ -422,7 +473,8 @@ async function handleCustomApiSpecialDetail(id, customApi) {
         const descMatch = html.match(/<div[^>]*class=["']sketch["'][^>]*>([\s\S]*?)<\/div>/);
         const descText = descMatch ? descMatch[1].replace(/<[^>]+>/g, ' ').trim() : '';
         
-        return JSON.stringify({
+        // 构建响应数据
+        const responseData = {
             code: 200,
             episodes: matches,
             detailUrl: detailUrl,
@@ -432,7 +484,12 @@ async function handleCustomApiSpecialDetail(id, customApi) {
                 source_name: '自定义源',
                 source_code: 'custom'
             }
-        });
+        };
+        
+        // 转换所有HTTP URL为HTTPS，解决混合内容问题
+        const secureResponseData = convertHttpToHttps(responseData);
+        
+        return JSON.stringify(secureResponseData);
     } catch (error) {
         console.error(`自定义API详情获取失败:`, error);
         throw error;
@@ -501,7 +558,8 @@ async function handleSpecialSourceDetail(id, sourceCode) {
         const descMatch = html.match(/<div[^>]*class=["']sketch["'][^>]*>([\s\S]*?)<\/div>/);
         const descText = descMatch ? descMatch[1].replace(/<[^>]+>/g, ' ').trim() : '';
         
-        return JSON.stringify({
+        // 构建响应数据
+        const responseData = {
             code: 200,
             episodes: matches,
             detailUrl: detailUrl,
@@ -511,7 +569,12 @@ async function handleSpecialSourceDetail(id, sourceCode) {
                 source_name: API_SITES[sourceCode].name,
                 source_code: sourceCode
             }
-        });
+        };
+        
+        // 转换所有HTTP URL为HTTPS，解决混合内容问题
+        const secureResponseData = convertHttpToHttps(responseData);
+        
+        return JSON.stringify(secureResponseData);
     } catch (error) {
         console.error(`${API_SITES[sourceCode].name}详情获取失败:`, error);
         throw error;

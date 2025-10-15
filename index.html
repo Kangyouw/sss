@@ -20,14 +20,14 @@
     <link rel="manifest" href="manifest.json">
     
     <!-- 预加载关键资源 -->
-    <link rel="preload" href="css/styles.css" as="style">
-    <link rel="preload" href="css/index.css" as="style">
+    <link rel="preload" href="css/styles.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+    <link rel="preload" href="css/index.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
     <link rel="preload" href="js/config.js" as="script">
+    <noscript><link rel="stylesheet" href="css/styles.css"><link rel="stylesheet" href="css/index.css"></noscript>
     
     <!-- 样式加载 -->
     <script src="libs/tailwindcss.min.js"></script>
-    <link rel="stylesheet" href="css/styles.css">
-    <link rel="stylesheet" href="css/index.css">
+    <!-- CSS已通过预加载的onload事件加载 -->
 </head>
 <body class="page-bg text-white">
     <!-- 将历史记录按钮移到左上角，并缩小尺寸 -->
