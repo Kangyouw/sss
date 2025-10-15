@@ -1941,27 +1941,31 @@ function addSkipSettingsToMenu() {
         return;
     }
     
-    // 创建设置容器 - 尝试多种可能的设置面板选择器
-    let settingsPanel = document.querySelector('.artplayer-setting');
+    // 检查播放器控制是否正常工作
+    let playerControlsNormal = false;
+    let settingsPanel = null;
     
-    // 如果找不到标准的设置面板，尝试其他可能的选择器
-    if (!settingsPanel) {
-        settingsPanel = document.querySelector('.artplayer-setting-panel');
-    }
-    
-    if (!settingsPanel) {
-        console.warn('未找到播放器设置面板，将尝试手动创建设置按钮和面板');
-        
-        // 如果播放器实例存在，尝试通过API访问设置面板
-        if (art && art.template && art.template.setting) {
-            settingsPanel = art.template.setting;
-            console.log('通过播放器API获取到设置面板');
+    // 尝试多种可能的设置面板选择器
+    const settingSelectors = ['.artplayer-setting', '.artplayer-setting-panel'];
+    for (const selector of settingSelectors) {
+        settingsPanel = document.querySelector(selector);
+        if (settingsPanel && settingsPanel.style.display !== 'none') {
+            playerControlsNormal = true;
+            console.log('找到正常的播放器设置面板');
+            break;
         }
     }
     
-    // 如果仍然找不到设置面板，创建一个临时的跳过设置区域
-    if (!settingsPanel) {
-        console.warn('无法访问播放器设置面板，创建临时跳过设置区域');
+    // 如果找不到标准设置面板，尝试通过API访问
+    if (!playerControlsNormal && art && art.template && art.template.setting) {
+        settingsPanel = art.template.setting;
+        playerControlsNormal = true;
+        console.log('通过播放器API获取到设置面板');
+    }
+    
+    // 只有在播放器控制不正常时才创建临时区域
+    if (!playerControlsNormal) {
+        console.warn('播放器控制不正常，创建临时跳过设置区域');
         
         // 查找播放器容器
         const playerContainer = document.querySelector('#player');
@@ -1970,7 +1974,7 @@ function addSkipSettingsToMenu() {
             return;
         }
         
-        // 创建一个明显的临时设置区域
+        // 创建临时设置区域
         const tempSettings = document.createElement('div');
         tempSettings.className = 'skip-settings-container temp-settings';
         tempSettings.style.cssText = `
@@ -1986,6 +1990,12 @@ function addSkipSettingsToMenu() {
         `;
         playerContainer.appendChild(tempSettings);
         settingsPanel = tempSettings;
+    }
+    
+    // 如果仍然没有设置面板，退出函数
+    if (!settingsPanel) {
+        console.error('无法创建设置面板或临时区域');
+        return;
     }
     
     const skipContainer = document.createElement('div');
@@ -2714,9 +2724,35 @@ function updateSettingsUI() {
 
 // 切换设置面板显示/隐藏
 function toggleSettingsPanel() {
-    const settingsPanel = document.getElementById('settingsPanel');
-    if (settingsPanel) {
-        settingsPanel.classList.toggle('hidden');
+    // 首先检查播放器控制是否正常工作
+    let playerControlsNormal = false;
+    const settingSelectors = ['.artplayer-setting', '.artplayer-setting-panel'];
+    
+    for (const selector of settingSelectors) {
+        const panel = document.querySelector(selector);
+        if (panel && panel.style.display !== 'none') {
+            playerControlsNormal = true;
+            break;
+        }
+    }
+    
+    // 如果播放器控制正常，只处理标准设置面板
+    if (playerControlsNormal) {
+        const settingsPanel = document.getElementById('settingsPanel');
+        if (settingsPanel) {
+            settingsPanel.classList.toggle('hidden');
+        }
+        // 确保临时区域不可见
+        const tempSettings = document.querySelector('.temp-settings');
+        if (tempSettings) {
+            tempSettings.style.display = 'none';
+        }
+    } else {
+        // 播放器控制不正常时，处理临时设置区域
+        const tempSettings = document.querySelector('.temp-settings');
+        if (tempSettings) {
+            tempSettings.style.display = tempSettings.style.display === 'none' ? 'block' : 'none';
+        }
     }
 }
 
